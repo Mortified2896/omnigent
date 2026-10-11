@@ -17,7 +17,7 @@ from tests.e2e_ui.start_session.test_start_session import (
     _run_in_fresh_loop,
 )
 
-_OPENAI_CHOICE_ID = "logical-openai-gpt-5.5-medium"
+_OPENAI_CHOICE_ID = "logical-openai-gpt-6.1-sol-medium"
 _GLM_CHOICE_ID = "logical-glm-glm-5.3-high"
 _CATALOG = {
     "object": "model_advisor.catalog",
@@ -27,10 +27,10 @@ _CATALOG = {
         {
             "choice_id": _OPENAI_CHOICE_ID,
             "provider": "openai",
-            "model_id": "gpt-5.5",
-            "display_name": "GPT-5.5",
+            "model_id": "gpt-6.1-sol",
+            "display_name": "GPT-6.1 Sol",
             "reasoning_effort": "medium",
-            "model_ids": ["gpt-5.5"],
+            "model_ids": ["gpt-6.1-sol"],
             "access_lanes": ["omniroute"],
             "default_access_lanes": ["omniroute"],
             "available": True,
@@ -75,16 +75,28 @@ _SAVED_PREFERENCES = {
 
 
 @pytest.mark.parametrize("submit_method", ["button", "enter"])
+@pytest.mark.parametrize("lose_launch_response", [False, True])
 def test_model_advisor_composer_pick_becomes_human_proposal(
-    seeded_session: tuple[str, str], tmp_path: Path, submit_method: str
+    seeded_session: tuple[str, str],
+    tmp_path: Path,
+    submit_method: str,
+    lose_launch_response: bool,
 ) -> None:
     """Keep the composer selectors visible and submit their logical proposal."""
     base_url, session_id = seeded_session
-    _run_in_fresh_loop(_drive_composer_proposal(base_url, session_id, tmp_path, submit_method))
+    _run_in_fresh_loop(
+        _drive_composer_proposal(
+            base_url, session_id, tmp_path, submit_method, lose_launch_response
+        )
+    )
 
 
 async def _drive_composer_proposal(
-    base_url: str, session_id: str, tmp_path: Path, submit_method: str
+    base_url: str,
+    session_id: str,
+    tmp_path: Path,
+    submit_method: str,
+    lose_launch_response: bool,
 ) -> None:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
@@ -99,6 +111,7 @@ async def _drive_composer_proposal(
             round_posts: list[dict[str, Any]] = []
             create_bodies: list[dict[str, Any]] = []
             confirmations: list[dict[str, Any]] = []
+            bound_round: dict[str, Any] | None = None
             await _register_common_routes(
                 page,
                 created_session_id=session_id,
@@ -136,9 +149,9 @@ async def _drive_composer_proposal(
                         {
                             "models": [
                                 {
-                                    "id": "gpt-5.5",
-                                    "model": "gpt-5.5",
-                                    "displayName": "GPT-5.5",
+                                    "id": "gpt-6.1-sol",
+                                    "model": "gpt-6.1-sol",
+                                    "displayName": "GPT-6.1 Sol",
                                     "accessLane": "codex-direct",
                                     "isDefault": True,
                                     "defaultReasoningEffort": "medium",
@@ -172,6 +185,11 @@ async def _drive_composer_proposal(
             async def handle_advisor_round(route: Route) -> None:
                 if route.request.method == "POST":
                     round_posts.append(route.request.post_data_json)
+                elif bound_round is not None:
+                    await route.fulfill(
+                        status=200, content_type="application/json", json=bound_round
+                    )
+                    return
                 await route.fulfill(
                     status=200,
                     content_type="application/json",
@@ -199,24 +217,27 @@ async def _drive_composer_proposal(
                 )
 
             async def handle_advisor_confirm(route: Route) -> None:
+                nonlocal bound_round
                 confirmations.append(route.request.post_data_json)
-                await route.fulfill(
-                    status=200,
-                    content_type="application/json",
-                    json={
-                        "object": "model_advisor.round",
-                        "round_id": "adviseround-e2e",
-                        "state": "dispatch_bound",
-                        "version": 2,
-                        "execution": {"session_id": session_id, "uncertain": False},
-                    },
-                )
+                bound_round = {
+                    "object": "model_advisor.round",
+                    "round_id": "adviseround-e2e",
+                    "state": "dispatch_bound",
+                    "version": 2,
+                    "execution": {"session_id": session_id, "uncertain": False},
+                }
+                if lose_launch_response:
+                    await route.abort("connectionfailed")
+                else:
+                    await route.fulfill(
+                        status=200, content_type="application/json", json=bound_round
+                    )
 
             await page.route("**/v1/model-advisor/rounds/*/confirm", handle_advisor_confirm)
             await page.route("**/v1/info", handle_info)
             await page.route(re.compile(r"/v1/sessions\?.*kind=any"), handle_agent_scan)
             await page.route(
-                f"**/v1/hosts/{_HOST_ID}/harnesses/codex-native/model-options",
+                f"**/v1/hosts/{_HOST_ID}/harnesses/codex-native/model-options*",
                 handle_model_options,
             )
             await page.route("**/v1/model-advisor/catalog?*", handle_advisor_catalog)
@@ -239,7 +260,7 @@ async def _drive_composer_proposal(
             await page.get_by_test_id("new-chat-landing-agent-select").click()
             await page.get_by_test_id("new-chat-landing-agent-ag_codex_e2e").click()
 
-            advisor_switch = page.get_by_role("button", name="Advisor off", exact=True)
+            advisor_switch = page.get_by_role("switch", name="Enable Advisor", exact=True)
             await expect(advisor_switch).to_be_visible()
             await advisor_switch.click()
             await expect(
@@ -249,7 +270,7 @@ async def _drive_composer_proposal(
             await expect(
                 page.get_by_text("Allowed answers — shared by you and the advisor")
             ).to_be_visible()
-            await page.get_by_role("button", name="Recommender settings", exact=True).click()
+            await page.keyboard.press("Escape")
             # Only the native icon/model trigger owns execution selection.
             await expect(
                 page.get_by_role("combobox", name="Your model", exact=True)
@@ -257,15 +278,18 @@ async def _drive_composer_proposal(
             await expect(
                 page.get_by_role("combobox", name="Your reasoning effort", exact=True)
             ).to_have_count(0)
-            model_picker = page.get_by_test_id("new-chat-landing-agent-select")
+            harness_picker = page.get_by_test_id("new-chat-landing-agent-select")
+            model_picker = page.get_by_test_id("new-chat-landing-model-select")
             effort_picker = page.get_by_test_id("new-chat-landing-inline-effort")
             permission_picker = page.get_by_test_id("new-chat-landing-permission-chip")
             await expect(model_picker).to_be_visible()
             await expect(effort_picker).to_be_visible()
             # The model list opens from the dedicated model chip (the Codex
             # harness is already selected above).
-            await page.get_by_test_id("new-chat-landing-model-select").click()
-            await page.get_by_test_id("new-chat-landing-agent-model-gpt-5.5-codex-direct").click()
+            await model_picker.click()
+            await page.get_by_test_id(
+                "new-chat-landing-agent-model-gpt-6.1-sol-codex-direct"
+            ).click()
             await page.keyboard.press("Escape")
             await page.keyboard.press("Escape")
             await effort_picker.click()
@@ -273,11 +297,12 @@ async def _drive_composer_proposal(
             await expect(effort_picker).to_contain_text("Medium")
             await expect(page.get_by_test_id("new-chat-landing-agent-icon")).to_be_visible()
             model_box = await model_picker.bounding_box()
+            harness_box = await harness_picker.bounding_box()
             effort_box = await effort_picker.bounding_box()
             permission_box = await permission_picker.bounding_box()
             assert model_box is not None and effort_box is not None
-            assert permission_box is not None
-            assert abs(model_box["y"] - permission_box["y"]) < 4
+            assert permission_box is not None and harness_box is not None
+            assert abs(harness_box["y"] - permission_box["y"]) < 4
             assert abs(model_box["y"] - effort_box["y"]) < 4
             assert model_box["x"] + model_box["width"] <= effort_box["x"] + 1
             assert effort_box["x"] + effort_box["width"] <= 390
@@ -286,12 +311,10 @@ async def _drive_composer_proposal(
             await expect(advisor_picker).to_have_count(1)
             await expect(advisor_picker).to_be_visible()
             await expect(advisor_effort).to_be_visible()
-            await expect(page.get_by_text("Recommender", exact=True)).to_be_visible()
             advisor_box = await advisor_picker.bounding_box()
             advisor_effort_box = await advisor_effort.bounding_box()
             assert advisor_box is not None and advisor_effort_box is not None
             assert abs(advisor_box["y"] - advisor_effort_box["y"]) < 2
-            assert advisor_box["width"] >= 100
             assert advisor_box["x"] + advisor_box["width"] <= advisor_effort_box["x"] + 2
             assert advisor_effort_box["x"] + advisor_effort_box["width"] <= 390
             await expect(advisor_picker).to_contain_text("GLM-5.3")
@@ -308,7 +331,7 @@ async def _drive_composer_proposal(
             await page.set_viewport_size({"width": 1280, "height": 900})
             await expect(model_picker).to_be_visible()
             await expect(page.get_by_test_id("new-chat-landing-model-select")).to_contain_text(
-                "GPT-5.5"
+                "GPT-6.1 Sol"
             )
             await expect(effort_picker).to_be_visible()
             await expect(advisor_picker).to_be_visible()

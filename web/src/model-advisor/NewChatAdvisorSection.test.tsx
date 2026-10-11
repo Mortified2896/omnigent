@@ -914,6 +914,101 @@ it("does not automatically repeat a failed launch and allows an explicit retry",
   expect(attempts).toBe(2);
 });
 
+it("opens the existing chat when the launch response is lost", async () => {
+  const original = api.getMockImplementation()!;
+  api.mockImplementation(async (url, init) => {
+    const response = await original(url, init);
+    if (String(url).endsWith("/confirm")) throw new TypeError("Load failed");
+    return response;
+  });
+  const onLaunched = vi.fn();
+  mountSection({ requireConfirmation: false, onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
+  expect(onLaunched).toHaveBeenCalledTimes(1);
+  expect(api.mock.calls.filter(([url]) => String(url).endsWith("/confirm"))).toHaveLength(1);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(readPromptTiming("conv_new")).not.toBeNull();
+});
+
+it("reconnects on explicit retry without launching twice after both responses are lost", async () => {
+  const original = api.getMockImplementation()!;
+  let confirmed = false;
+  let recoveryReadFailed = false;
+  api.mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/confirm")) {
+      await original(url, init);
+      confirmed = true;
+      throw new TypeError("Load failed");
+    }
+    if (confirmed && !recoveryReadFailed && String(url).includes("/rounds/")) {
+      recoveryReadFailed = true;
+      throw new TypeError("Load failed");
+    }
+    return original(url, init);
+  });
+  const onLaunched = vi.fn();
+  mountSection({ requireConfirmation: false, onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  await screen.findByText(/Connection interrupted while starting your chat/);
+  expect(onLaunched).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Retry launch" }));
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"));
+  expect(onLaunched).toHaveBeenCalledTimes(1);
+  expect(api.mock.calls.filter(([url]) => String(url).endsWith("/confirm"))).toHaveLength(1);
+});
+
+it("waits for an already claimed launch to bind before opening its chat", async () => {
+  const original = api.getMockImplementation()!;
+  let bound: Record<string, unknown> | null = null;
+  let claimedReads = 0;
+  api.mockImplementation(async (url, init) => {
+    if (String(url).endsWith("/confirm")) {
+      const response = await original(url, init);
+      bound = await response.json();
+      rounds["adviseround-1"] = {
+        ...bound,
+        state: "dispatch_claimed",
+        execution: { session_id: null, uncertain: false },
+      };
+      throw new TypeError("Load failed");
+    }
+    if (bound && String(url).includes("/rounds/") && ++claimedReads === 3)
+      rounds["adviseround-1"] = bound;
+    return original(url, init);
+  });
+  const onLaunched = vi.fn();
+  mountSection({ requireConfirmation: false, onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"), { timeout: 3000 });
+  expect(onLaunched).toHaveBeenCalledTimes(1);
+  expect(api.mock.calls.filter(([url]) => String(url).endsWith("/confirm"))).toHaveLength(1);
+});
+
+it("keeps the pending round when a status read has a transient network failure", async () => {
+  const original = api.getMockImplementation()!;
+  let failRead = true;
+  api.mockImplementation(async (url, init) => {
+    if (failRead && String(url).includes("/rounds/") && init?.method === "GET") {
+      failRead = false;
+      throw new TypeError("Load failed");
+    }
+    return original(url, init);
+  });
+  const onLaunched = vi.fn();
+  mountSection({ requireConfirmation: false, onLaunched });
+  await screen.findByRole("region", { name: "Model advisor settings" });
+  send();
+  await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("conv_new"), { timeout: 3000 });
+  expect(
+    api.mock.calls.filter(([url]) => String(url).endsWith("/model-advisor/rounds")),
+  ).toHaveLength(1);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("seeds declared defaults so enabling a never-configured advisor is valid immediately", async () => {
   prefsDto = {
     object: "model_advisor.preferences",

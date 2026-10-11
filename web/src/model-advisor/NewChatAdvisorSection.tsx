@@ -198,6 +198,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const [promptTiming, setPromptTiming] = useState<PromptTiming | null>(null);
   const [round, setRound] = useState<RoundFlowState>(IDLE_ROUND);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const completedLaunches = useRef(new Set<string>());
   const mounted = useRef(true);
   const scopeToken = useRef({ generation: 0, host: "" });
   const inputGeneration = useRef(0);
@@ -468,49 +469,90 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     launchLabels,
   ]);
 
+  const openLaunchedChat = useCallback(
+    (dto: RoundDto) => {
+      const sessionId = dto.execution.session_id;
+      if (hostId === null || sessionId === null || completedLaunches.current.has(dto.round_id))
+        return;
+      completedLaunches.current.add(dto.round_id);
+      if (editor.draft)
+        writeSessionAdvisorChoices(hostId, sessionId, {
+          preferences: editor.draft,
+          humanPick,
+        });
+      if (promptTiming) handoffPromptTiming(sessionId, promptTiming);
+      onLaunched(sessionId);
+    },
+    [editor.draft, hostId, humanPick, onLaunched, promptTiming],
+  );
+
   const pollRound = useCallback(
     (
       host: string,
-      roundId: string,
+      initial: RoundDto,
       startedAt: number,
       generation: number,
       inputVersion: number,
     ) => {
       stopPolling();
+      let latest = initial;
+      let inFlight = false;
+      let finished = false;
       const tick = () =>
         void (async () => {
+          if (inFlight || finished) return;
+          inFlight = true;
           try {
-            const dto = await fetchRound(host, roundId);
+            const dto = await fetchRound(host, initial.round_id);
             if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion)
               return;
-            if (dto.state === "advisor_pending" || dto.state === "assigning") {
+            latest = dto;
+            if (
+              dto.state === "advisor_pending" ||
+              dto.state === "assigning" ||
+              dto.state === "dispatch_claimed"
+            ) {
               if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+                finished = true;
                 stopPolling();
                 setRound({
                   round: dto,
                   busy: false,
-                  error: "The advisor is still preparing; check this round later.",
+                  error: "Your request is still processing. Check progress to reconnect.",
                 });
               }
               return;
             }
+            finished = true;
             stopPolling();
             setRound({ round: dto, busy: false, error: null });
+            openLaunchedChat(dto);
           } catch (cause) {
             if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion)
               return;
+            // A failed read does not mean the server stopped. Keep the same
+            // round and reconnect rather than dropping its launch identity.
+            if (cause instanceof TypeError && Date.now() - startedAt <= POLL_TIMEOUT_MS) return;
+            finished = true;
             stopPolling();
             setRound({
-              round: null,
+              round: latest,
               busy: false,
-              error: cause instanceof Error ? cause.message : "Couldn't load the round.",
+              error:
+                cause instanceof TypeError
+                  ? "Connection interrupted. Check progress to reconnect."
+                  : cause instanceof Error
+                    ? cause.message
+                    : "Couldn't load the round.",
             });
+          } finally {
+            inFlight = false;
           }
         })();
       tick();
       pollTimer.current = setInterval(tick, POLL_INTERVAL_MS);
     },
-    [isCurrentScope, stopPolling],
+    [isCurrentScope, openLaunchedChat, stopPolling],
   );
 
   const handleChange = useCallback((next: ProviderPreferences) => {
@@ -643,7 +685,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         );
         if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({ round: dto, busy: true, error: null });
-        pollRound(host, dto.round_id, Date.now(), generation, inputVersion);
+        pollRound(host, dto, Date.now(), generation, inputVersion);
       } catch (cause) {
         if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({
@@ -671,7 +713,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const handleConfirm = useCallback(
     (overrideId: string | null, reason: string | null) => {
       const host = hostId;
-      const current = round.round;
+      let current = round.round;
       if (host === null || current === null || round.busy) return;
       if (launchAgentId === null || launchWorkspace === null) {
         setRound({
@@ -686,6 +728,23 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       setRound({ round: current, busy: true, error: null });
       void (async () => {
         try {
+          // Retrying must first discover whether the original request already
+          // created a chat. Never dispatch again from a stale review version.
+          if (round.error || current.state === "dispatch_claimed") {
+            current = await fetchRound(host, current.round_id);
+            if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion)
+              return;
+            setRound({ round: current, busy: false, error: null });
+            if (current.execution.session_id !== null) {
+              openLaunchedChat(current);
+              return;
+            }
+            if (current.state !== "awaiting_confirmation") {
+              setRound({ round: current, busy: true, error: null });
+              pollRound(host, current, Date.now(), generation, inputVersion);
+              return;
+            }
+          }
           const dto = await confirmRound(
             host,
             current.round_id,
@@ -705,38 +764,59 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           );
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({ round: dto, busy: false, error: dto.launch_error ?? null });
-          if (dto.execution.session_id !== null) {
-            if (editor.draft)
-              writeSessionAdvisorChoices(host, dto.execution.session_id, {
-                preferences: editor.draft,
-                humanPick,
-              });
-            if (promptTiming) handoffPromptTiming(dto.execution.session_id, promptTiming);
-            onLaunched(dto.execution.session_id);
+          openLaunchedChat(dto);
+          if (dto.state === "dispatch_claimed" && !dto.launch_error && !dto.execution.uncertain) {
+            setRound({ round: dto, busy: true, error: null });
+            pollRound(host, dto, Date.now(), generation, inputVersion);
           }
         } catch (cause) {
+          if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
+          // The confirmation response can be lost after the server launches.
+          // Recover its authoritative binding before reporting a failure.
+          try {
+            const fresh = await fetchRound(host, current.round_id);
+            if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion)
+              return;
+            current = fresh;
+            if (fresh.execution.session_id !== null) {
+              setRound({ round: fresh, busy: false, error: null });
+              openLaunchedChat(fresh);
+              return;
+            }
+            if (fresh.state === "dispatch_claimed" && !fresh.execution.uncertain) {
+              setRound({ round: fresh, busy: true, error: null });
+              pollRound(host, fresh, Date.now(), generation, inputVersion);
+              return;
+            }
+          } catch {
+            // Preserve the original round so an explicit retry can reconnect.
+          }
           if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
           setRound({
             round: current,
             busy: false,
-            error: cause instanceof Error ? cause.message : "Couldn't run the round.",
+            error:
+              cause instanceof TypeError
+                ? "Connection interrupted while starting your chat. Check progress to reconnect."
+                : cause instanceof Error
+                  ? cause.message
+                  : "Couldn't run the round.",
           });
         }
       })();
     },
     [
       continueSessionId,
-      editor.draft,
-      humanPick,
       hostId,
       isCurrentScope,
       launchAgentId,
       launchWorkspace,
       launchProjectId,
       launchLabels,
-      onLaunched,
-      promptTiming,
+      openLaunchedChat,
+      pollRound,
       round.busy,
+      round.error,
       round.round,
     ],
   );
@@ -975,7 +1055,9 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               timing={promptTiming}
               label="Advisor progress"
               stage={
-                round.round?.state === "awaiting_confirmation" || round.round?.state === "assigning"
+                round.round?.state === "awaiting_confirmation" ||
+                round.round?.state === "assigning" ||
+                round.round?.state === "dispatch_claimed"
                   ? "Starting your chat"
                   : "Advisor choosing a model"
               }
@@ -1002,7 +1084,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       {!reviewVisible && round.error !== null ? (
         <p className="text-sm text-destructive" role="alert">
           {round.error}
-          {!launchNeedsApproval && round.round?.state === "awaiting_confirmation" ? (
+          {!launchNeedsApproval && round.round !== null && !round.round.execution.uncertain ? (
             <Button type="button" disabled={round.busy} onClick={() => handleConfirm(null, null)}>
               Retry launch
             </Button>
