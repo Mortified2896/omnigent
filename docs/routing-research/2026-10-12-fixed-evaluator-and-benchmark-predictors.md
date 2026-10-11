@@ -6,6 +6,10 @@ execution setup. Artificial Analysis's Coding Agent Index and Intelligence
 Index follow. Completion is the objective; latency and cost are secondary.
 No public benchmark execution is needed to start this predictor comparison.
 
+The [first difficulty-adjusted saved-work comparison](2026-10-12-saved-work-predictor-results.md)
+is now complete. Its holdouts do not yet select a benchmark or mixture for
+production routing; the results and scope/label limits are recorded separately.
+
 The main evaluation stream reuses completed ordinary work. Freeze real requests,
 saved answers and acceptance evidence into a custom evaluation dataset; do not
 pay models to solve every task again. After checking the evaluator on a small
