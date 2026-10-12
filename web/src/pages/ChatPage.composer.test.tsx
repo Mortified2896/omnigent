@@ -6092,6 +6092,10 @@ describe("Model Advisor in an existing chat", () => {
           rationale: "Same model suffices.",
         },
       };
+      let finishSelection!: () => void;
+      const selectionPending = new Promise<void>((resolve) => {
+        finishSelection = resolve;
+      });
       advisorFetch.mockImplementation(async (url: string) => {
         if (url.includes("/model-advisor/catalog"))
           return Response.json({
@@ -6123,7 +6127,10 @@ describe("Model Advisor in an existing chat", () => {
             state: "executing",
             execution: { session_id: "conv_chat_advisor", uncertain: false },
           });
-        if (url.includes("/model-advisor/rounds")) return Response.json(round);
+        if (url.includes("/model-advisor/rounds")) {
+          await selectionPending;
+          return Response.json(round);
+        }
         throw new Error(`Unexpected request: ${url}`);
       });
       const onSend = vi.fn();
@@ -6153,6 +6160,11 @@ describe("Model Advisor in an existing chat", () => {
       fireEvent.submit(textarea().closest("form")!);
       expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Run selected model" })).not.toBeInTheDocument();
+      expect(await screen.findByLabelText("Advisor progress")).toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(textarea()).toHaveAttribute("readonly");
+      expect(onSend).not.toHaveBeenCalled();
+      await act(async () => finishSelection());
       await waitFor(() =>
         expect(onSend).toHaveBeenCalledWith("Continue", withAttachments ? [file] : undefined),
       );
@@ -6259,7 +6271,7 @@ describe("Model Advisor in an existing chat", () => {
 
   afterEach(() => cleanup());
 
-  it("keeps a follow-up in the composer while its same-session review opens", async () => {
+  it("keeps a follow-up and recovery controls inline without opening a modal", async () => {
     advisorFetch.mockImplementation(async (url: string) => {
       if (url.includes("/model-advisor/catalog")) {
         return Response.json({
@@ -6320,10 +6332,11 @@ describe("Model Advisor in an existing chat", () => {
     fireEvent.change(textarea(), { target: { value: "Continue the analysis" } });
     fireEvent.submit(textarea().closest("form")!);
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(await screen.findByTestId("model-advisor-section")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Choose a model for this follow-up" }),
-    ).toBeDefined();
+      screen.queryByRole("heading", { name: "Choose a model for this follow-up" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Message the agent")).toHaveValue("Continue the analysis");
     expect(textarea()).toHaveAttribute("readonly");
     fireEvent.change(textarea(), { target: { value: "Changed after sending" } });
@@ -6331,7 +6344,7 @@ describe("Model Advisor in an existing chat", () => {
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.getByTestId("model-advisor-section")).toBeInTheDocument();
     expect(toggle).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Advisor send" }));
     expect(textarea()).not.toHaveAttribute("readonly");
     act(() => useChatStore.setState({ conversationId: "another_chat" }));
     expect(screen.getByTestId("chat-model-advisor-toggle")).toHaveAttribute(

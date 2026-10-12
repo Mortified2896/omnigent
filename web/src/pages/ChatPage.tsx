@@ -2497,7 +2497,7 @@ function ComposerImpl(
   const [commandError, setCommandError] = useState<string | null>(null);
   const [planModeBusy, setPlanModeBusy] = useState(false);
   const [advisorEnabled, setAdvisorEnabled] = useState(false);
-  const [advisorDialogOpen, setAdvisorDialogOpen] = useState(false);
+  const [advisorSubmissionActive, setAdvisorSubmissionActive] = useState(false);
   const [advisorSettingsOpen, setAdvisorSettingsOpen] = useState(false);
   const [advisorModelTarget, setAdvisorModelTarget] = useState<HTMLDivElement | null>(null);
   const [keepChosenModel, setKeepChosenModel] = useState(false);
@@ -2505,8 +2505,8 @@ function ComposerImpl(
   const [advisorFeedbackTarget, setAdvisorFeedbackTarget] = useState<HTMLDivElement | null>(null);
   const [advisorReviewLocked, setAdvisorFlowLocked] = useState(false);
   // A closing review can report one final busy state during its exit.
-  // Only an open dialog may lock the composer toggle.
-  const advisorFlowLocked = advisorDialogOpen && advisorReviewLocked;
+  // Only an active submission may lock the composer toggle.
+  const advisorFlowLocked = advisorSubmissionActive && advisorReviewLocked;
   const [pendingAdvisorSend, setPendingAdvisorSend] = useState<{
     sessionId: string;
     task: string;
@@ -2656,12 +2656,12 @@ function ComposerImpl(
     conversationId !== null &&
     !isTempConvId(conversationId);
   const [advisorUsesCurrentModel, setAdvisorUsesCurrentModel] = useState(false);
-  const advisorWaitingForResponse = pendingAdvisorSend !== null && !advisorDialogOpen;
+  const advisorWaitingForResponse = pendingAdvisorSend !== null && !advisorSubmissionActive;
 
   useEffect(() => {
     setAdvisorEnabled(readSessionAdvisorEnabled(advisorHostId, conversationId));
     setKeepChosenModel(readKeepChosenModel(advisorHostId, conversationId));
-    setAdvisorDialogOpen(false);
+    setAdvisorSubmissionActive(false);
     setAdvisorSettingsOpen(false);
     setAdvisorFlowLocked(false);
     setPendingAdvisorSend(null);
@@ -2674,7 +2674,7 @@ function ComposerImpl(
       (!isWorking || advisorUsesCurrentModel)
     ) {
       setAdvisorSettingsOpen(false);
-      setAdvisorDialogOpen(true);
+      setAdvisorSubmissionActive(true);
     }
   }, [conversationId, isWorking, pendingAdvisorSend, advisorUsesCurrentModel]);
 
@@ -3745,9 +3745,9 @@ function ComposerImpl(
             ? "Model Advisor is reviewing this follow-up. Changes apply when the current response finishes."
             : "Model Advisor will review this follow-up when the current response finishes.",
         );
-        if (advisorUsesCurrentModel) setAdvisorDialogOpen(true);
+        if (advisorUsesCurrentModel) setAdvisorSubmissionActive(true);
       } else {
-        setAdvisorDialogOpen(true);
+        setAdvisorSubmissionActive(true);
       }
       return;
     }
@@ -3807,7 +3807,7 @@ function ComposerImpl(
       setMention(null);
       replaceText("");
       setPendingAdvisorSend(null);
-      setAdvisorDialogOpen(false);
+      setAdvisorSubmissionActive(false);
       setAdvisorFlowLocked(false);
       setCommandError(null);
     },
@@ -4261,7 +4261,7 @@ function ComposerImpl(
                     setAdvisorEnabled(!advisorEnabled);
                     if (advisorEnabled) {
                       setPendingAdvisorSend(null);
-                      setAdvisorDialogOpen(false);
+                      setAdvisorSubmissionActive(false);
                       setCommandError(null);
                     }
                   }}
@@ -4299,7 +4299,7 @@ function ComposerImpl(
                   title="Recommender settings"
                   data-testid="chat-model-advisor-settings"
                   onClick={() => {
-                    setAdvisorDialogOpen(false);
+                    setAdvisorSubmissionActive(false);
                     setAdvisorSettingsOpen(true);
                   }}
                 >
@@ -4568,7 +4568,7 @@ function ComposerImpl(
           confirmationBlockReason={
             isWorking ? "The recommendation can apply when the current response finishes." : null
           }
-          autoSubmit={advisorDialogOpen && pendingAdvisorSend !== null}
+          autoSubmit={advisorSubmissionActive && pendingAdvisorSend !== null}
           enabledOverride={advisorEnabled}
           showComposerControls
           selectorsOnly
@@ -4613,38 +4613,20 @@ function ComposerImpl(
           <div ref={setAdvisorSettingsTarget} />
         </DialogContent>
       </Dialog>
-      <Dialog
-        open={advisorDialogOpen && pendingAdvisorSend !== null}
-        onOpenChange={(open) => {
-          if (open) {
-            setAdvisorDialogOpen(true);
-            return;
-          }
-          if (advisorFlowLocked) return;
-          setAdvisorDialogOpen(false);
-          setPendingAdvisorSend(null);
-          setCommandError(null);
-        }}
-      >
-        <DialogContent
-          className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"
-          onEscapeKeyDown={(event) => {
-            if (advisorFlowLocked) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            if (advisorFlowLocked) event.preventDefault();
+      <div className="max-h-[45dvh] overflow-y-auto" ref={setAdvisorFeedbackTarget} />
+      {advisorSubmissionActive && pendingAdvisorSend !== null && !advisorFlowLocked ? (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            setAdvisorSubmissionActive(false);
+            setPendingAdvisorSend(null);
+            setCommandError(null);
           }}
         >
-          <DialogHeader>
-            <DialogTitle>Choose a model for this follow-up</DialogTitle>
-            <DialogDescription>
-              Model Advisor selects a model before sending. Models marked for approval wait for your
-              confirmation or override. Attachments go to the selected answer model.
-            </DialogDescription>
-          </DialogHeader>
-          <div ref={setAdvisorFeedbackTarget} />
-        </DialogContent>
-      </Dialog>
+          Cancel Advisor send
+        </Button>
+      ) : null}
 
       <ComposerStatusLine />
     </form>
