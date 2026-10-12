@@ -10590,6 +10590,89 @@ describe("managed sandbox inference models", () => {
     );
     mounted.unmount();
   });
+  it("restricts composer models and efforts to the Advisor pool and restores all choices when off", async () => {
+    const executionModels = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"].map((id, index) => ({
+      id,
+      displayName: id,
+      accessLane: "codex-direct" as const,
+      isDefault: index === 0,
+      defaultReasoningEffort: "low",
+      supportedReasoningEfforts: ["low", "high", "max"].map((reasoningEffort) => ({
+        reasoningEffort,
+      })),
+    }));
+    useHostModelOptionsMock.mockImplementation(
+      (_hostId, harness) =>
+        (harness === "codex-native"
+          ? { ...SUCCESS_QUERY_STATE, data: executionModels }
+          : CLAUDE_MODEL_OPTIONS_RESULT) as unknown as ReturnType<typeof useHostModelOptions>,
+    );
+    const choices = executionModels.slice(0, 2).map((model, index) => ({
+      choice_id: `allowed-${index}`,
+      provider: "openai",
+      model_id: model.id,
+      display_name: model.displayName,
+      reasoning_effort: index === 0 ? "max" : "high",
+      model_ids: [model.id],
+      access_lanes: ["codex-direct"],
+      available: true,
+    }));
+    const provider = {
+      enabled: true,
+      collapsed: false,
+      selected_choice_ids: choices.map((choice) => choice.choice_id),
+      disabled_model_ids: [],
+      transport_preference: "direct_only",
+    };
+    authenticatedFetchMock.mockImplementation(async (url) => {
+      if (String(url).includes("/model-advisor/catalog"))
+        return Response.json({ catalog_revision: "test", options: [], logical_options: choices });
+      if (String(url).includes("/model-advisor/preferences"))
+        return Response.json({
+          version: 1,
+          etag: "test",
+          logical_preferences: {
+            schema_version: 3,
+            enabled: true,
+            providers: {
+              openai: provider,
+              glm: { ...provider, enabled: false, selected_choice_ids: [] },
+            },
+            advisor_model_mode: "jev",
+            advisor_choice_id: null,
+            human_probability_percent: 0,
+            unresolved_legacy_ids: [],
+            route_review_required: [],
+          },
+        });
+      return Response.json({});
+    });
+    renderLanding({ features: { model_advisor: true } });
+    selectAgent("a2");
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("Max"),
+    );
+    expect(screen.queryByText(/Choose an allowed model/)).toBeNull();
+    openAgentModels("a2");
+    expect(
+      screen.getByTestId("new-chat-landing-agent-model-gpt-6-luna-codex-direct"),
+    ).toBeVisible();
+    expect(
+      screen.queryByTestId("new-chat-landing-agent-model-gpt-6-astra-codex-direct"),
+    ).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-agent-model-default")).toBeNull();
+    fireEvent.click(screen.getByTestId("new-chat-landing-agent-model-gpt-6.1-sol-codex-direct"));
+    closePrimaryPicker();
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-inline-effort")).toHaveTextContent("High"),
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "Enable Advisor" }));
+    openAgentModels("a2");
+    expect(
+      await screen.findByTestId("new-chat-landing-agent-model-gpt-6-astra-codex-direct"),
+    ).toBeVisible();
+  });
+
   it("keeps upstream human model/effort controls independent from Advisor selection", async () => {
     const choice = {
       choice_id: "choice-openai",

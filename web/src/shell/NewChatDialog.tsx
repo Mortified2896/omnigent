@@ -3689,15 +3689,16 @@ export function NewChatLandingScreen() {
         .filter(
           (choice) =>
             choice.modelIds.includes(pickedModel) &&
-            (pickedCodexAccessLane === null ||
-              choice.accessLanes.includes(pickedCodexAccessLane)),
+            (pickedCodexAccessLane === null || choice.accessLanes.includes(pickedCodexAccessLane)),
         )
         .map((choice) => choice.effort)
     : null;
   const pickerEffortOptions =
     advisorAllowedEfforts === null
       ? pickerEffortOptionsUnfiltered
-      : pickerEffortOptionsUnfiltered.filter((option) => advisorAllowedEfforts.includes(option.value));
+      : pickerEffortOptionsUnfiltered.filter((option) =>
+          advisorAllowedEfforts.includes(option.value),
+        );
   const rememberPickerOptions = (harness: string, options: HarnessOptions) => {
     const previous = pickerEdits;
     setPickerEdits({
@@ -3807,6 +3808,7 @@ export function NewChatLandingScreen() {
       if (allowedEfforts.includes(pickedEffort)) return;
     }
     const next =
+      selectedRow ??
       advisorAllowedPickerModelOptions.find((option) => option.isDefault) ??
       advisorAllowedPickerModelOptions[0];
     if (next) selectPickerModelRef.current(next.id, next.accessLane ?? null);
@@ -3991,7 +3993,8 @@ export function NewChatLandingScreen() {
     ? []
     : advisorAllowedPickerModelOptions.filter(modelSearchMatches);
   const modelPickerChoices: ComposerConfigChoice[] = [
-    ...(!sandboxInferenceConfigured &&
+    ...(!advisorRestrictsModels &&
+    !sandboxInferenceConfigured &&
     visiblePickerModelOptions.length > 0 &&
     !visiblePickerModelOptions.some((option) => option.isDefault)
       ? [
@@ -4046,7 +4049,7 @@ export function NewChatLandingScreen() {
   const modelMenuBody = (
     <ComposerConfigSections
       routing={
-        smartRoutingEligible
+        smartRoutingEligible && !advisorRestrictsModels
           ? {
               testId: "new-chat-landing-agent-routing",
               header: "Routing",
@@ -4085,19 +4088,25 @@ export function NewChatLandingScreen() {
                 data-testid="new-chat-landing-agent-model-search"
               />
             )}
-            {((pickerModelsLoading || !advisorChoicesReady) && advisorAllowedPickerModelOptions.length === 0) && (
-              <div className="px-2 py-1 text-xs text-muted-foreground">Loading models…</div>
-            )}
-            {pickerModelsLoading && pickerModelOptions.length === 0 && (
-              <div className="px-2 py-1 text-xs text-muted-foreground">
-                {pickerModelsError?.message ?? "Models unavailable"}
-              </div>
-            )}
-            {advisorChoicesReady && advisorRestrictsModels && advisorAllowedPickerModelOptions.length === 0 && (
-              <div className="px-2 py-1 text-xs text-muted-foreground">
-                No models are enabled in Advisor settings for this harness.
-              </div>
-            )}
+            {(pickerModelsLoading || !advisorChoicesReady) &&
+              advisorAllowedPickerModelOptions.length === 0 && (
+                <div className="px-2 py-1 text-xs text-muted-foreground">Loading models…</div>
+              )}
+            {!pickerModelsLoading &&
+              advisorChoicesReady &&
+              !advisorRestrictsModels &&
+              pickerModelOptions.length === 0 && (
+                <div className="px-2 py-1 text-xs text-muted-foreground">
+                  {pickerModelsError?.message ?? "Models unavailable"}
+                </div>
+              )}
+            {advisorChoicesReady &&
+              advisorRestrictsModels &&
+              advisorAllowedPickerModelOptions.length === 0 && (
+                <div className="px-2 py-1 text-xs text-muted-foreground">
+                  No models are enabled in Advisor settings for this harness.
+                </div>
+              )}
           </>
         ),
         choices: modelPickerChoices,

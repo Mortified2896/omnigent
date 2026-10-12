@@ -466,22 +466,19 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
 
   const resolveHumanChoice = useCallback((): string | null => {
     if (!humanPick || humanPick.model === "") return null;
-    const modelChoices = options.filter(
+    const matches = options.filter(
       (option) =>
         option.available &&
-        option.model_ids.includes(humanPick.model),
+        option.model_ids.includes(humanPick.model) &&
+        (humanPick.effort
+          ? option.reasoning_effort === humanPick.effort
+          : option.reasoning_effort === "not_applicable" ||
+            (option.default_access_lanes ?? []).some(
+              (lane) =>
+                (humanPick.accessLane === null || lane === humanPick.accessLane) &&
+                option.access_lanes.includes(lane),
+            )),
     );
-    const matches = modelChoices.filter((option) => {
-      if (humanPick.effort && option.reasoning_effort !== humanPick.effort) return false;
-      if (humanPick.accessLane !== null)
-        return option.access_lanes.includes(humanPick.accessLane);
-      const defaultLanes = option.default_access_lanes ?? [];
-      return (
-        (defaultLanes.length > 0 &&
-          defaultLanes.some((lane) => option.access_lanes.includes(lane))) ||
-        (defaultLanes.length === 0 && option.reasoning_effort === "not_applicable")
-      );
-    });
     return matches.length === 1 ? matches[0].choice_id : null;
   }, [humanPick, options]);
 
