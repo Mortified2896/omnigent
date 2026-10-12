@@ -6156,6 +6156,14 @@ describe("Model Advisor in an existing chat", () => {
       await waitFor(() =>
         expect(onSend).toHaveBeenCalledWith("Continue", withAttachments ? [file] : undefined),
       );
+      // Native readiness can settle after the send callback. A completed
+      // draft must never leave an empty Advisor modal over the next turn.
+      await act(async () => {
+        useChatStore.setState({ status: "streaming" });
+      });
+      await act(async () => {
+        useChatStore.setState({ status: "idle" });
+      });
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
       if (withAttachments) {
         const posted = advisorFetch.mock.calls.find(([url]) => url === "/v1/model-advisor/rounds")!;

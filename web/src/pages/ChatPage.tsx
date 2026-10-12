@@ -4614,7 +4614,7 @@ function ComposerImpl(
         </DialogContent>
       </Dialog>
       <Dialog
-        open={advisorDialogOpen}
+        open={advisorDialogOpen && pendingAdvisorSend !== null}
         onOpenChange={(open) => {
           if (open) {
             setAdvisorDialogOpen(true);
