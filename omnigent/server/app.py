@@ -3341,6 +3341,17 @@ def create_app(
                 raise RuntimeError("session event-dispatch path is not wired")
             if len(body.initial_items) != 1:
                 raise RuntimeError("Model Advisor executor launch requires one initial task")
+            from omnigent.model_advisor_attachments import persist_answer_attachments
+
+            # Files belong to this newly-created session before the ordinary
+            # event path scans policy input and starts its one complete turn.
+            body.initial_items[0].data["content"] = await asyncio.to_thread(
+                persist_answer_attachments,
+                body.initial_items[0].data["content"],
+                session.id,
+                file_store,
+                artifact_store,
+            )
             await post_event(request, session.id, body.initial_items[0])
 
             # The advisor service expects the created session snapshot, not

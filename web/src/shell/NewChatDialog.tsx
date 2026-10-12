@@ -7098,16 +7098,6 @@ export function NewChatLandingScreen() {
                   : {}),
               }}
               onLaunched={(sessionId) => {
-                if (files.length > 0) {
-                  setPendingInitialPrompt(sessionId, {
-                    text:
-                      buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
-                      sanitizeInitialPrompt(message),
-                    skill: null,
-                    files: [...files],
-                    ...(taskTags.length > 0 ? { taskTags: [...taskTags] } : {}),
-                  });
-                }
                 queryClient.invalidateQueries({ queryKey: ["projects"] });
                 queryClient.invalidateQueries({ queryKey: ["project-sessions"] });
                 setTaskTags([]);

@@ -1,6 +1,6 @@
 """Bounded inline attachments for pre-session Advisor rounds.
 
-The answer uses the ordinary session upload queue. The selector sees
+The answer uses the ordinary session file store and event path. The selector sees
 images, bounded text excerpts, and explicit metadata for binary documents;
 it never needs filesystem tools to choose an execution model.
 """
@@ -122,6 +122,59 @@ def advisor_attachment_context(attachments: tuple[dict[str, str], ...]) -> list[
             )
         context.append(entry)
     return context
+
+
+def answer_attachment_blocks(attachments: tuple[dict[str, str], ...]) -> list[dict[str, str]]:
+    """Carry frozen bytes to the private session launcher before its first turn."""
+    return [
+        {
+            "type": "input_image" if item["content_type"].startswith("image/") else "input_file",
+            "filename": item["filename"],
+            "image_url"
+            if item["content_type"].startswith("image/")
+            else "file_data": f"data:{item['content_type']};base64,{item['data']}",
+        }
+        for item in attachments
+    ]
+
+
+def persist_answer_attachments(
+    content: list[dict[str, Any]], session_id: str, file_store: Any, artifact_store: Any
+) -> list[dict[str, Any]]:
+    """Use session-owned file IDs so policy scanning and normal delivery apply.
+
+    Only called by the private Advisor launcher with normalized, frozen data.
+    Nothing is posted to the runner until every file has been stored.
+    """
+    stored_ids = []
+    result = []
+    try:
+        for block in content:
+            if block.get("type") not in {"input_image", "input_file"}:
+                result.append(block)
+                continue
+            uri = block.get("image_url") or block.get("file_data")
+            if not isinstance(uri, str) or not uri.startswith("data:"):
+                raise ValueError("Advisor answer attachments must be frozen inline data")
+            header, encoded = uri.split(",", 1)
+            raw = base64.b64decode(encoded, validate=True)
+            stored = file_store.create(
+                session_id=session_id,
+                filename=block["filename"],
+                content_type=header[5:].removesuffix(";base64"),
+                bytes=len(raw),
+            )
+            stored_ids.append(stored.id)
+            artifact_store.put(stored.id, raw)
+            result.append(
+                {"type": block["type"], "file_id": stored.id, "filename": stored.filename}
+            )
+        return result
+    except Exception:
+        for file_id in stored_ids:
+            file_store.delete(file_id, session_id=session_id)
+            artifact_store.delete(file_id)
+        raise
 
 
 def attachment_prompt_data(request: dict[str, object]) -> str:

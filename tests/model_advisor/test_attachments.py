@@ -3,6 +3,7 @@
 import base64
 import io
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -11,8 +12,10 @@ from omnigent.model_advisor_attachments import (
     MAX_ADVISOR_TEXT_CHARACTERS,
     advisor_attachment_context,
     advisor_image_inputs,
+    answer_attachment_blocks,
     attachment_prompt_data,
     normalize_attachments,
+    persist_answer_attachments,
 )
 from omnigent.model_advisor_provider_workflow import LogicalFrozenRound
 from tests.model_advisor.test_provider_workflow import frozen_round
@@ -87,3 +90,38 @@ def test_same_name_with_changed_bytes_changes_round_identity():
 def test_remote_image_context_is_rejected():
     with pytest.raises(ValueError, match="inline data"):
         advisor_image_inputs({"attachments": [{"image_url": "https://example.com/private"}]})
+
+
+@pytest.mark.parametrize("fail_write", [False, True])
+def test_answer_files_are_session_owned_before_the_complete_turn_is_posted(fail_write):
+    created = []
+    deleted = []
+    blobs = {}
+
+    def create(**kwargs):
+        created.append(kwargs)
+        return SimpleNamespace(id="file-1", filename=kwargs["filename"])
+
+    def put(file_id, raw):
+        if fail_write:
+            raise OSError("storage unavailable")
+        blobs[file_id] = raw
+
+    store = SimpleNamespace(create=create, delete=lambda file_id, **_: deleted.append(file_id))
+    artifacts = SimpleNamespace(put=put, delete=lambda file_id: blobs.pop(file_id, None))
+    files = normalize_attachments([attachment("notes.txt", b"hello")])
+    content = [*answer_attachment_blocks(files), {"type": "input_text", "text": "Read this"}]
+    if fail_write:
+        with pytest.raises(OSError, match="storage unavailable"):
+            persist_answer_attachments(content, "session-1", store, artifacts)
+        assert deleted == ["file-1"]
+        assert not blobs
+    else:
+        delivered = persist_answer_attachments(content, "session-1", store, artifacts)
+        assert delivered == [
+            {"type": "input_file", "file_id": "file-1", "filename": "notes.txt"},
+            {"type": "input_text", "text": "Read this"},
+        ]
+        assert created[0]["session_id"] == "session-1"
+        assert created[0]["content_type"] == "text/plain"
+        assert blobs["file-1"] == b"hello"

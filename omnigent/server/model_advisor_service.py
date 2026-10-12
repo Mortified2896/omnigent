@@ -1700,11 +1700,9 @@ class ModelAdvisorService:
             return continue_session_id, plan.primary
 
         def body_for(route: QualifiedRoute) -> SessionCreateRequest:
+            from omnigent.model_advisor_attachments import answer_attachment_blocks
+
             labels = labels_for(route)
-            # The browser hands attachment-bearing drafts to the ordinary
-            # upload/send queue after binding. Do not start a text-only turn
-            # before its files arrive; normal upload ACLs and retry recovery
-            # remain authoritative for the answer.
             return SessionCreateRequest(
                 agent_id=launch["agent_id"],
                 initial_items=[
@@ -1712,7 +1710,10 @@ class ModelAdvisorService:
                         type="message",
                         data={
                             "role": "user",
-                            "content": [{"type": "input_text", "text": frozen.task}],
+                            "content": [
+                                *answer_attachment_blocks(frozen.attachments),
+                                {"type": "input_text", "text": frozen.task},
+                            ],
                             **({"task_tags": list(frozen.task_tags)} if frozen.task_tags else {}),
                             **(
                                 {"task_tag_suggestions": list(review.suggested_task_tags)}
@@ -1721,9 +1722,7 @@ class ModelAdvisorService:
                             ),
                         },
                     )
-                ]
-                if not frozen.attachments
-                else [],
+                ],
                 project_id=launch.get("project_id"),
                 labels=labels,
                 host_id=host_id,

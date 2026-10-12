@@ -773,9 +773,14 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
         assert len(launched) == 1
         body = launched[0][0]
         if with_attachments:
+            assert body.initial_items[0].data["content"][0] == {
+                "type": "input_file",
+                "filename": "notes.txt",
+                "file_data": "data:text/plain;base64,aGVsbG8=",
+            }
             assert (
-                body.initial_items == []
-            )  # Browser posts text + files through normal upload queue.
+                body.initial_items[0].data["content"][-1]["text"] == "Compare these provider plans"
+            )
         assert body.project_id == "project_1"
         assert body.labels["omnigent.test.run_id"] == "filing-regression"
         assert body.title is None
