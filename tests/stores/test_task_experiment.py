@@ -55,11 +55,23 @@ def test_revisions_and_feedback_independent(conversation_store):
         conv.id, "answer", "alice", -1, comment="Unpleasant", update_comment=True
     )
     for label in ("not_sure", "partial", "failed", "success"):
-        save_outcome(store, conv.id, "answer", "alice", label)
+        save_outcome(
+            store,
+            conv.id,
+            "answer",
+            "alice",
+            label,
+            comment=f"Review comment: {label}",
+            tags=["Tests/verification"],
+        )
     reopened = SqlAlchemyConversationStore(store.storage_location)
     rows = list_experiment_events(reopened, conv.id)
     assert [r["outcome"] for r in rows] == ["not_sure", "partial", "failed", "success"]
     assert [r["first_attempt_success"] for r in rows] == [None, 0, 0, 1]
+    assert [r["comment"] for r in rows] == [
+        f"Review comment: {label}" for label in ("not_sure", "partial", "failed", "success")
+    ]
+    assert all(r["tags"] == ["Tests/verification"] for r in rows)
     assert all(r["created_by"] == "alice" for r in rows)
     assert len({r["id"] for r in rows}) == 4
     assert reopened.list_response_feedback(conv.id, "alice")[0].rating == -1

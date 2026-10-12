@@ -84,7 +84,9 @@ def test_direct_feedback_entry_keeps_reading_position(
     comment.fill("Could not find the deployment; please include the direct link.")
     before_save = comment.bounding_box()
     assert before_save is not None
-    expect(page.get_by_label("Feedback save status")).to_have_text("Saved", timeout=10_000)
+    expect(page.get_by_label("Feedback save status")).to_have_text(
+        "Saved to server", timeout=10_000
+    )
     page.wait_for_timeout(300)
     after_save = comment.bounding_box()
     assert after_save is not None

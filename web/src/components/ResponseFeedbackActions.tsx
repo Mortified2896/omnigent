@@ -144,6 +144,7 @@ function OutcomeEditor({
   const [modelDecisionOpen, setModelDecisionOpen] = useState(Boolean(outcome));
   const scrollLock = useContext(ConversationScrollLockContext);
   const commentId = useId();
+  const saveStatusId = useId();
   const [hydrated, setHydrated] = useState(!autoSave);
   useEffect(() => {
     if (outcome) setModelDecisionOpen(true);
@@ -209,6 +210,40 @@ function OutcomeEditor({
     mutate,
   ]);
 
+  const saved = hydrated && !detailsChanged && !isPending && !isError;
+  const saveStatus = autoSave && (outcome || isPending || isError) && (
+    <div
+      id={saveStatusId}
+      className={cn(
+        "flex min-h-5 items-center justify-end gap-1 text-xs",
+        isError ? "text-destructive" : "text-muted-foreground",
+      )}
+      role="status"
+      aria-atomic="true"
+      aria-label="Feedback save status"
+    >
+      {saved && (
+        <CheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
+      )}
+      <span>{isError ? "Changes not saved" : saved ? "Saved to server" : "Saving…"}</span>
+      {isError && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() =>
+            mutate({
+              outcome: mutation.variables?.outcome ?? outcome!,
+              comment: comment.trim() || null,
+              tags,
+            })
+          }
+        >
+          Retry save
+        </Button>
+      )}
+    </div>
+  );
+
   return (
     <div
       className="order-last flex w-full basis-full flex-col gap-2 py-1"
@@ -243,30 +278,7 @@ function OutcomeEditor({
         </div>
 
         <ResponseScoringActions sessionId={sessionId} responseId={responseId} compact={compact} />
-        {autoSave && (outcome || isPending || isError) && (
-          <div
-            className="ml-auto flex min-h-5 min-w-16 items-center justify-end gap-1 text-xs text-muted-foreground"
-            role="status"
-            aria-label="Feedback save status"
-          >
-            <span>{isError ? "Not saved" : isPending || detailsChanged ? "Saving…" : "Saved"}</span>
-            {isError && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  mutate({
-                    outcome: mutation.variables?.outcome ?? outcome!,
-                    comment: comment.trim() || null,
-                    tags,
-                  })
-                }
-              >
-                Retry save
-              </Button>
-            )}
-          </div>
-        )}
+        {!outcome && <div className="ml-auto">{saveStatus}</div>}
       </div>
 
       <div className={compact ? "space-y-2" : "contents"}>
@@ -394,8 +406,10 @@ function OutcomeEditor({
               className="block min-w-0 w-full rounded-md border bg-background p-2 text-base md:text-sm"
               placeholder="Optional comment — what worked or what needs correction?"
               aria-label="Task review comment"
+              aria-describedby={autoSave ? saveStatusId : undefined}
               onChange={(event) => setComment(event.target.value)}
             />
+            {saveStatus}
           </div>
         )}
 
@@ -404,7 +418,7 @@ function OutcomeEditor({
             outcome,
             comment,
             tags,
-            saved: !detailsChanged && !mutation.isPending && !mutation.isError,
+            saved,
             onReplaceDetails: async (details) => {
               const nextComment = details.comment.slice(0, 4000);
               const nextTags = [...new Set(details.tags)].slice(0, 8);

@@ -60,7 +60,14 @@ export function useSaveTaskOutcome(sessionId: string, responseId: string) {
       if (!response.ok) throw new Error("Task outcome was not saved");
       return (await response.json()) as ExperimentEvent;
     },
-    onSuccess: async () => {
+    onSuccess: async (saved) => {
+      // Confirm from the persisted PUT response even if the following GET fails.
+      // Cancel an older read so it cannot replace the acknowledged revision.
+      await client.cancelQueries({ queryKey: key(sessionId) });
+      client.setQueryData<ExperimentEvent[]>(key(sessionId), (rows = []) => [
+        ...rows.filter((row) => row.id !== saved.id),
+        saved,
+      ]);
       await client.invalidateQueries({ queryKey: key(sessionId) });
     },
   });

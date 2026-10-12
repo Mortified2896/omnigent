@@ -242,7 +242,7 @@ it("shows a failed autosave without losing the draft and supports an explicit re
   fail = true;
   fireEvent.change(comment, { target: { value: "Keep this unsaved draft" } });
   await screen.findByRole("button", { name: "Retry save" });
-  expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Not saved");
+  expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Changes not saved");
   expect(comment).toHaveValue("Keep this unsaved draft");
   fail = false;
   fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
@@ -291,14 +291,61 @@ it("saves newer comment edits after an older autosave finishes", async () => {
   const comment = await screen.findByLabelText("Task review comment");
   await waitFor(() => expect(comment).toHaveValue("Initial note"));
   fireEvent.change(comment, { target: { value: "First draft" } });
+  expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saving…");
   await waitFor(() => expect(release).toBeDefined());
+  expect(screen.getByLabelText("Feedback save status")).not.toHaveTextContent("Saved to server");
   expect(comment).toBeEnabled();
   fireEvent.change(comment, { target: { value: "Latest draft" } });
   release!();
+  expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saving…");
   await waitFor(() => expect(outcomes.at(-1)?.comment).toBe("Latest draft"), { timeout: 2000 });
   expect(comment).toHaveValue("Latest draft");
   await waitFor(() =>
-    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved"),
+    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved to server"),
+  );
+  const status = screen.getByLabelText("Feedback save status");
+  expect(comment).toHaveAttribute("aria-describedby", status.id);
+  expect(comment.nextElementSibling).toBe(status);
+});
+
+it("confirms the persisted comment when the refresh after saving fails, without duplicate writes", async () => {
+  outcomes = [
+    {
+      id: "existing",
+      kind: "outcome",
+      response_id: "answer",
+      outcome: "partial",
+      comment: "Initial note",
+      tags: [],
+    },
+  ];
+  const originalApi = api.getMockImplementation()!;
+  let failRefresh = false;
+  api.mockImplementation(async (url: string, options?: RequestInit) => {
+    if (url.endsWith("/task-experiment") && failRefresh) {
+      return new Response(null, { status: 500 });
+    }
+    return originalApi(url, options);
+  });
+  const view = mount(null, "answer", true, true);
+  const comment = await screen.findByLabelText("Task review comment");
+  await waitFor(() => expect(comment).toHaveValue("Initial note"));
+  failRefresh = true;
+  fireEvent.change(comment, { target: { value: "Confirmed by the server" } });
+  await waitFor(() =>
+    expect(screen.getByLabelText("Feedback save status")).toHaveTextContent("Saved to server"),
+  );
+  await new Promise((resolve) => {
+    window.setTimeout(resolve, 600);
+  });
+  expect(outcomes).toHaveLength(2);
+  expect(comment).toHaveValue("Confirmed by the server");
+
+  failRefresh = false;
+  view.unmount();
+  mount(null, "answer", true, true);
+  await waitFor(() =>
+    expect(screen.getByLabelText("Task review comment")).toHaveValue("Confirmed by the server"),
   );
 });
 
