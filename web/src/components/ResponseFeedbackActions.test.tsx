@@ -169,7 +169,9 @@ it("shows compact choices and marks the assigned option without repeating it in 
       "true",
     ),
   );
-  expect(screen.queryByTestId("model-attribution")).not.toBeInTheDocument();
+  expect(await screen.findByTestId("model-attribution")).toBeVisible();
+  expect(screen.getByText("Show model decision").closest("details")).toHaveAttribute("open");
+  expect(outcomes).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "Partial" }));
   const comment = await screen.findByLabelText("Task review comment");
   expect(screen.getByText("Show model decision").closest("details")).toHaveAttribute("open");
@@ -184,6 +186,28 @@ it("shows compact choices and marks the assigned option without repeating it in 
   expect(screen.queryByText("Execution details")).not.toBeInTheDocument();
   expect(screen.queryByText(/Response \/ trace key/)).not.toBeInTheDocument();
   expect(screen.getByLabelText("Task review comment")).toHaveValue("Unbiased first impression");
+});
+it("reopens an excluded unrated answer's model decision after reload", async () => {
+  scoringPolicy.responses.answer = { score_eligible: false, exclusion_reason: null };
+  mount("host-test", "answer", true);
+  expect(await screen.findByTestId("model-attribution")).toBeVisible();
+  await waitFor(() =>
+    expect(screen.getByText("Show model decision").closest("details")).toHaveAttribute("open"),
+  );
+  expect(await screen.findByLabelText("Advisor’s choice · Selected")).toHaveTextContent(
+    "GPT-6 Sol",
+  );
+  expect(outcomes).toHaveLength(0);
+});
+it("keeps the decision hidden when excluding an unrated answer fails", async () => {
+  mount("host-test", "answer", true);
+  const toggle = await screen.findByRole("switch", { name: "Do not score" });
+  fail = true;
+  fireEvent.click(toggle);
+  await screen.findByRole("alert");
+  expect(toggle).toHaveAttribute("aria-checked", "false");
+  expect(screen.queryByTestId("model-attribution")).not.toBeInTheDocument();
+  expect(outcomes).toHaveLength(0);
 });
 it("keeps the no-Advisor state clear and marks only a reported matching choice", async () => {
   advisorRoundAttached = false;

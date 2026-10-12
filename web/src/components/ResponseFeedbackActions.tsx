@@ -141,14 +141,16 @@ function OutcomeEditor({
   const [tags, setTags] = useState<string[]>(human?.tags ?? []);
   const [customTag, setCustomTag] = useState("");
   const [editingTags, setEditingTags] = useState(false);
-  const [modelDecisionOpen, setModelDecisionOpen] = useState(Boolean(outcome));
+  const [modelDecisionOpen, setModelDecisionOpen] = useState(
+    Boolean(outcome || excludedFromScoring),
+  );
   const scrollLock = useContext(ConversationScrollLockContext);
   const commentId = useId();
   const saveStatusId = useId();
   const [hydrated, setHydrated] = useState(!autoSave);
   useEffect(() => {
-    if (outcome) setModelDecisionOpen(true);
-  }, [outcome]);
+    if (outcome || excludedFromScoring) setModelDecisionOpen(true);
+  }, [outcome, excludedFromScoring]);
   useEffect(() => {
     if (autoSave && ready && !hydrated) {
       setComment(human?.comment ?? "");
@@ -442,7 +444,7 @@ function OutcomeEditor({
               ),
           })}
 
-        {compact && outcome && (
+        {compact && (outcome || excludedFromScoring) && (
           <details
             open={modelDecisionOpen}
             onToggle={(event) => setModelDecisionOpen(event.currentTarget.open)}

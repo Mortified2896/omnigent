@@ -45,7 +45,7 @@ function mount() {
   return render(
     <QueryClientProvider client={client}>
       <ResponseFeedbackProvider sessionId="session">
-        <ResponseFeedbackActions responseId="answer" />
+        <ResponseFeedbackActions responseId="answer" compact={false} />
       </ResponseFeedbackProvider>
     </QueryClientProvider>,
   );
