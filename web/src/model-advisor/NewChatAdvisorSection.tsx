@@ -38,6 +38,7 @@ import {
   type RoundDto,
 } from "@/lib/modelAdvisorApi";
 import {
+  activeChoiceIds,
   emptyProviderPreferences,
   effectiveOptions,
   type LogicalOption,
@@ -77,6 +78,13 @@ export interface HumanModelPick {
   effort: string;
 }
 
+export interface AdvisorExecutionChoice {
+  modelIds: readonly string[];
+  accessLanes: readonly string[];
+  defaultAccessLanes: readonly string[];
+  effort: string;
+}
+
 export interface AdvisorSubmitHandle {
   /** True means Advisor owns this send, including loading/error/review states. */
   submit: () => boolean;
@@ -98,6 +106,9 @@ export interface NewChatAdvisorSectionProps {
   continueSessionId?: string | null;
   onFlowStateChange?: (busy: boolean, reviewVisible: boolean) => void;
   onCurrentModelAdvisorChange?: (current: boolean) => void;
+  onExecutionChoicesChange?: (
+    value: { enabled: boolean; choices: readonly AdvisorExecutionChoice[] } | null,
+  ) => void;
   confirmationBlockReason?: string | null;
   advisorModelTarget?: HTMLElement | null;
   keepChosenModel?: boolean;
@@ -175,6 +186,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     continueSessionId = null,
     onFlowStateChange,
     onCurrentModelAdvisorChange,
+    onExecutionChoicesChange,
     confirmationBlockReason,
     advisorModelTarget,
     keepChosenModel = false,
@@ -454,19 +466,22 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
 
   const resolveHumanChoice = useCallback((): string | null => {
     if (!humanPick || humanPick.model === "") return null;
-    const matches = options.filter(
+    const modelChoices = options.filter(
       (option) =>
         option.available &&
-        option.model_ids.includes(humanPick.model) &&
-        (humanPick.effort
-          ? option.reasoning_effort === humanPick.effort
-          : option.reasoning_effort === "not_applicable" ||
-            (option.default_access_lanes ?? []).some(
-              (lane) =>
-                (humanPick.accessLane === null || lane === humanPick.accessLane) &&
-                option.access_lanes.includes(lane),
-            )),
+        option.model_ids.includes(humanPick.model),
     );
+    const matches = modelChoices.filter((option) => {
+      if (humanPick.effort && option.reasoning_effort !== humanPick.effort) return false;
+      if (humanPick.accessLane !== null)
+        return option.access_lanes.includes(humanPick.accessLane);
+      const defaultLanes = option.default_access_lanes ?? [];
+      return (
+        (defaultLanes.length > 0 &&
+          defaultLanes.some((lane) => option.access_lanes.includes(lane))) ||
+        (defaultLanes.length === 0 && option.reasoning_effort === "not_applicable")
+      );
+    });
     return matches.length === 1 ? matches[0].choice_id : null;
   }, [humanPick, options]);
 
@@ -500,6 +515,29 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     savedAdvisorUnavailable,
     usesJevRouter,
   ]);
+
+  const executionChoices = useMemo(() => {
+    const draft = editor.draft;
+    if (!draft) return null;
+    const activeIds = new Set(activeChoiceIds(draft, options));
+    return {
+      enabled: draft.enabled,
+      choices: draft.enabled
+        ? options
+            .filter((option) => activeIds.has(option.choice_id))
+            .map((option) => ({
+              modelIds: option.model_ids,
+              accessLanes: option.access_lanes,
+              defaultAccessLanes: option.default_access_lanes ?? [],
+              effort: option.reasoning_effort,
+            }))
+        : [],
+    };
+  }, [editor.draft, options]);
+
+  useEffect(() => {
+    onExecutionChoicesChange?.(executionChoices);
+  }, [executionChoices, onExecutionChoicesChange]);
 
   useEffect(() => {
     const identity = JSON.stringify({

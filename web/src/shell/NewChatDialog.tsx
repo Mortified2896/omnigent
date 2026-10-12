@@ -116,6 +116,7 @@ import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { writeSessionAdvisorEnabled } from "@/model-advisor/sessionAdvisorPreference";
 import {
   NewChatAdvisorSection,
+  type AdvisorExecutionChoice,
   type AdvisorSubmitHandle,
 } from "@/model-advisor/NewChatAdvisorSection";
 import { HarnessSetupDialog } from "@/shell/HarnessSetupDialog";
@@ -2618,6 +2619,10 @@ export function NewChatLandingScreen() {
   const [worktreePopoverOpen, setWorktreePopoverOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [advisorSubmitting, setAdvisorSubmitting] = useState(false);
+  const [advisorExecutionChoices, setAdvisorExecutionChoices] = useState<{
+    enabled: boolean;
+    choices: readonly AdvisorExecutionChoice[];
+  } | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   // "Connect a host" instructions modal, opened from the host dropdown.
   const [connectOpen, setConnectOpen] = useState(false);
@@ -3486,17 +3491,53 @@ export function NewChatLandingScreen() {
   const permissionConfigRow = configSummary.find(
     (row) => row.label === "Permission mode" || row.label === "Mode",
   );
-  const pickerModelOptions: readonly NativeModelOption[] = sandboxInferenceConfigured
-    ? (sandboxCatalog ?? [])
-    : supportsPermissionMode
-      ? claudeModelOptions
-      : selectedNativeHarness === "devin-native"
-        ? devinModelOptions
-        : selectedNativeHarness === "pi-native"
-          ? piModelOptions
-          : selectedNativeHarness === "codex-native"
-            ? currentModelChoices(codexModelOptions, (row) => row.model ?? row.id)
-            : [];
+  const pickerModelOptions = useMemo<readonly NativeModelOption[]>(
+    () =>
+      sandboxInferenceConfigured
+        ? (sandboxCatalog ?? [])
+        : supportsPermissionMode
+          ? claudeModelOptions
+          : selectedNativeHarness === "devin-native"
+            ? devinModelOptions
+            : selectedNativeHarness === "pi-native"
+              ? piModelOptions
+              : selectedNativeHarness === "codex-native"
+                ? currentModelChoices(codexModelOptions, (row) => row.model ?? row.id)
+                : [],
+    [
+      sandboxInferenceConfigured,
+      sandboxCatalog,
+      supportsPermissionMode,
+      claudeModelOptions,
+      selectedNativeHarness,
+      devinModelOptions,
+      piModelOptions,
+      codexModelOptions,
+    ],
+  );
+  const advisorChoicesReady = !modelAdvisorEnabled || advisorExecutionChoices !== null;
+  const advisorRestrictsModels = modelAdvisorEnabled && advisorExecutionChoices?.enabled === true;
+  const advisorAllowedPickerModelOptions = useMemo(() => {
+    if (!modelAdvisorEnabled) return pickerModelOptions;
+    if (!advisorChoicesReady) return [];
+    if (!advisorRestrictsModels) return pickerModelOptions;
+    return pickerModelOptions.filter((model) =>
+      (advisorExecutionChoices?.choices ?? []).some(
+        (choice) =>
+          choice.modelIds.includes(model.id) &&
+          (model.accessLane
+            ? choice.accessLanes.includes(model.accessLane)
+            : choice.accessLanes.length === 0 ||
+              choice.defaultAccessLanes.some((lane) => choice.accessLanes.includes(lane))),
+      ),
+    );
+  }, [
+    advisorChoicesReady,
+    advisorExecutionChoices,
+    advisorRestrictsModels,
+    modelAdvisorEnabled,
+    pickerModelOptions,
+  ]);
   const [pickerModelSearch, setPickerModelSearch] = useState("");
   const pickerModelsLoading =
     sandboxCatalogPending ||
@@ -3622,7 +3663,7 @@ export function NewChatLandingScreen() {
   const visiblePermissionRow =
     pickerLoading && !interactiveWhileLoading ? cachedPermission?.row : permissionConfigRow;
   useEffect(() => setPickerModelSearch(""), [selectedNativeHarness]);
-  const pickerEffortOptions = supportsPermissionMode
+  const pickerEffortOptionsUnfiltered = supportsPermissionMode
     ? CLAUDE_NATIVE_EFFORTS
     : selectedNativeHarness === "devin-native"
       ? // Devin encodes effort as a model-variant suffix, and the rung set is
@@ -3643,6 +3684,20 @@ export function NewChatLandingScreen() {
               pickedModel || codexModelOptions.find((option) => option.isDefault)?.id,
             ).map((value) => ({ value, label: normalizeEffortLabel(value) }))
           : [];
+  const advisorAllowedEfforts = advisorRestrictsModels
+    ? (advisorExecutionChoices?.choices ?? [])
+        .filter(
+          (choice) =>
+            choice.modelIds.includes(pickedModel) &&
+            (pickedCodexAccessLane === null ||
+              choice.accessLanes.includes(pickedCodexAccessLane)),
+        )
+        .map((choice) => choice.effort)
+    : null;
+  const pickerEffortOptions =
+    advisorAllowedEfforts === null
+      ? pickerEffortOptionsUnfiltered
+      : pickerEffortOptionsUnfiltered.filter((option) => advisorAllowedEfforts.includes(option.value));
   const rememberPickerOptions = (harness: string, options: HarnessOptions) => {
     const previous = pickerEdits;
     setPickerEdits({
@@ -3690,7 +3745,7 @@ export function NewChatLandingScreen() {
     // pick when the new ladder still offers it, else the model's declared
     // default, else the deterministic supported rung. "" survives only where
     // no ladder resolves (the picker is hidden then).
-    const effort =
+    const reconciledEffort =
       selectedNativeHarness === "codex-native"
         ? reconcileCodexEffortForModel(
             accessLane
@@ -3700,6 +3755,19 @@ export function NewChatLandingScreen() {
             pickedEffort,
           )
         : pickedEffort;
+    const allowedAdvisorEfforts = advisorRestrictsModels
+      ? (advisorExecutionChoices?.choices ?? [])
+          .filter(
+            (choice) =>
+              choice.modelIds.includes(picked) &&
+              (accessLane === null || choice.accessLanes.includes(accessLane)),
+          )
+          .map((choice) => choice.effort)
+      : null;
+    const effort =
+      allowedAdvisorEfforts === null || allowedAdvisorEfforts.includes(reconciledEffort)
+        ? reconciledEffort
+        : (allowedAdvisorEfforts[0] ?? "");
     setPickedModel(picked);
     setPickedEffort(effort);
     setCostControlMode(null);
@@ -3716,6 +3784,42 @@ export function NewChatLandingScreen() {
     setPickedEffort(picked);
     rememberPickerOptions(selectedNativeHarness, { effort: picked });
   };
+  const selectPickerModelRef = useRef(selectPickerModel);
+  selectPickerModelRef.current = selectPickerModel;
+  useEffect(() => {
+    if (!advisorRestrictsModels || !advisorChoicesReady || pickerModelsLoading) return;
+    const selectedRow = advisorAllowedPickerModelOptions.find(
+      (option) =>
+        option.id === pickedModel &&
+        (pickedCodexAccessLane !== null
+          ? option.accessLane === pickedCodexAccessLane
+          : option.accessLane === undefined || option.isDefault === true),
+    );
+    if (selectedRow) {
+      const allowedEfforts = (advisorExecutionChoices?.choices ?? [])
+        .filter(
+          (choice) =>
+            choice.modelIds.includes(selectedRow.id) &&
+            (selectedRow.accessLane === undefined ||
+              choice.accessLanes.includes(selectedRow.accessLane)),
+        )
+        .map((choice) => choice.effort);
+      if (allowedEfforts.includes(pickedEffort)) return;
+    }
+    const next =
+      advisorAllowedPickerModelOptions.find((option) => option.isDefault) ??
+      advisorAllowedPickerModelOptions[0];
+    if (next) selectPickerModelRef.current(next.id, next.accessLane ?? null);
+  }, [
+    advisorAllowedPickerModelOptions,
+    advisorChoicesReady,
+    advisorExecutionChoices,
+    advisorRestrictsModels,
+    pickedCodexAccessLane,
+    pickedEffort,
+    pickedModel,
+    pickerModelsLoading,
+  ]);
   const handleSetPickedHarness = useCallback(
     (harness: string | null, agentId?: string) => {
       setSmartRoutingDropped(null);
@@ -3885,7 +3989,7 @@ export function NewChatLandingScreen() {
   // catalog — the old Edit flyout simply never opened for it.
   const visiblePickerModelOptions = modelHarnessUnavailable
     ? []
-    : pickerModelOptions.filter(modelSearchMatches);
+    : advisorAllowedPickerModelOptions.filter(modelSearchMatches);
   const modelPickerChoices: ComposerConfigChoice[] = [
     ...(!sandboxInferenceConfigured &&
     visiblePickerModelOptions.length > 0 &&
@@ -3981,12 +4085,17 @@ export function NewChatLandingScreen() {
                 data-testid="new-chat-landing-agent-model-search"
               />
             )}
-            {pickerModelsLoading && pickerModelOptions.length === 0 && (
+            {((pickerModelsLoading || !advisorChoicesReady) && advisorAllowedPickerModelOptions.length === 0) && (
               <div className="px-2 py-1 text-xs text-muted-foreground">Loading models…</div>
             )}
-            {!pickerModelsLoading && pickerModelOptions.length === 0 && (
+            {pickerModelsLoading && pickerModelOptions.length === 0 && (
               <div className="px-2 py-1 text-xs text-muted-foreground">
                 {pickerModelsError?.message ?? "Models unavailable"}
+              </div>
+            )}
+            {advisorChoicesReady && advisorRestrictsModels && advisorAllowedPickerModelOptions.length === 0 && (
+              <div className="px-2 py-1 text-xs text-muted-foreground">
+                No models are enabled in Advisor settings for this harness.
               </div>
             )}
           </>
@@ -7071,6 +7180,7 @@ export function NewChatLandingScreen() {
               onFlowStateChange={(busy, reviewVisible) =>
                 setAdvisorSubmitting(busy || reviewVisible)
               }
+              onExecutionChoicesChange={setAdvisorExecutionChoices}
               files={files}
               advisorModelTarget={advisorSlotEl}
               taskTags={taskTags}
