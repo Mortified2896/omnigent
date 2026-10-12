@@ -4559,6 +4559,7 @@ function ComposerImpl(
           key={`${advisorHostId}:${conversationId}`}
           hostId={advisorHostId}
           task={pendingAdvisorSend?.task ?? value}
+          files={pendingAdvisorSend?.files ?? files}
           humanPick={advisorHumanPick}
           launchAgentId={advisorAgentId}
           launchWorkspace={advisorWorkspace}

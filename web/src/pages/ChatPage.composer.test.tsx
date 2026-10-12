@@ -6055,100 +6055,120 @@ describe("saved sandbox inference policy", () => {
 });
 
 describe("Model Advisor in an existing chat", () => {
-  it("unlocks the toggle after confirming an Advisor follow-up", async () => {
-    const choice = {
-      choice_id: "choice-openai",
-      provider: "openai",
-      model_id: "gpt-6.1-sol",
-      display_name: "GPT-6.1-Sol",
-      reasoning_effort: "medium",
-      model_ids: ["gpt-6.1-sol"],
-      access_lanes: ["codex-direct"],
-      available: true,
-    };
-    const provider = {
-      enabled: true,
-      collapsed: true,
-      selected_choice_ids: [choice.choice_id],
-      disabled_model_ids: [],
-      transport_preference: "direct_only",
-    };
-    const round = {
-      object: "model_advisor.round",
-      round_id: "round-1",
-      state: "awaiting_confirmation",
-      version: 1,
-      etag: "round-1",
-      execution: { session_id: null, uncertain: false },
-      review: {
-        round_fingerprint: "fp-1",
-        human_choice_id: choice.choice_id,
-        advisor_choice_id: choice.choice_id,
-        assigned_choice_id: choice.choice_id,
-        assigned_arm: "same",
-        human_probability_percent: 50,
-        rationale: "Same model suffices.",
-      },
-    };
-    advisorFetch.mockImplementation(async (url: string) => {
-      if (url.includes("/model-advisor/catalog"))
-        return Response.json({
-          object: "model_advisor.catalog",
-          catalog_revision: "rev-1",
-          options: [],
-          logical_options: [choice],
-        });
-      if (url.includes("/model-advisor/preferences"))
-        return Response.json({
-          version: 1,
-          etag: "prefs-1",
-          logical_preferences: {
-            schema_version: 3,
-            enabled: true,
-            providers: {
-              openai: provider,
-              glm: { ...provider, enabled: false, selected_choice_ids: [] },
+  it.each([false, true])(
+    "unlocks the toggle after confirming an Advisor follow-up (attachments: %s)",
+    async (withAttachments) => {
+      const choice = {
+        choice_id: "choice-openai",
+        provider: "openai",
+        model_id: "gpt-6.1-sol",
+        display_name: "GPT-6.1-Sol",
+        reasoning_effort: "medium",
+        model_ids: ["gpt-6.1-sol"],
+        access_lanes: ["codex-direct"],
+        available: true,
+      };
+      const provider = {
+        enabled: true,
+        collapsed: true,
+        selected_choice_ids: [choice.choice_id],
+        disabled_model_ids: [],
+        transport_preference: "direct_only",
+      };
+      const round = {
+        object: "model_advisor.round",
+        round_id: "round-1",
+        state: "awaiting_confirmation",
+        version: 1,
+        etag: "round-1",
+        execution: { session_id: null, uncertain: false },
+        review: {
+          round_fingerprint: "fp-1",
+          human_choice_id: choice.choice_id,
+          advisor_choice_id: choice.choice_id,
+          assigned_choice_id: choice.choice_id,
+          assigned_arm: "same",
+          human_probability_percent: 50,
+          rationale: "Same model suffices.",
+        },
+      };
+      advisorFetch.mockImplementation(async (url: string) => {
+        if (url.includes("/model-advisor/catalog"))
+          return Response.json({
+            object: "model_advisor.catalog",
+            catalog_revision: "rev-1",
+            options: [],
+            logical_options: [choice],
+          });
+        if (url.includes("/model-advisor/preferences"))
+          return Response.json({
+            version: 1,
+            etag: "prefs-1",
+            logical_preferences: {
+              schema_version: 3,
+              enabled: true,
+              providers: {
+                openai: provider,
+                glm: { ...provider, enabled: false, selected_choice_ids: [] },
+              },
+              advisor_choice_id: choice.choice_id,
+              human_probability_percent: 50,
+              unresolved_legacy_ids: [],
+              route_review_required: [],
             },
-            advisor_choice_id: choice.choice_id,
-            human_probability_percent: 50,
-            unresolved_legacy_ids: [],
-            route_review_required: [],
-          },
+          });
+        if (url.includes("/confirm"))
+          return Response.json({
+            ...round,
+            state: "executing",
+            execution: { session_id: "conv_chat_advisor", uncertain: false },
+          });
+        if (url.includes("/model-advisor/rounds")) return Response.json(round);
+        throw new Error(`Unexpected request: ${url}`);
+      });
+      const onSend = vi.fn();
+      renderWithTooltips(
+        <Composer
+          {...composerProps({
+            onSend,
+            modelPickerKind: "codex",
+            advisorHostId: "host_1",
+            advisorAgentId: "ag_1",
+            advisorWorkspace: "/repo",
+            advisorHumanPick: {
+              model: "gpt-6.1-sol",
+              accessLane: "codex-direct",
+              effort: "medium",
+            },
+          })}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("chat-model-advisor-toggle"));
+      const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+      if (withAttachments)
+        fireEvent.change(document.querySelector('input[type="file"]')!, {
+          target: { files: [file] },
         });
-      if (url.includes("/confirm"))
-        return Response.json({
-          ...round,
-          state: "executing",
-          execution: { session_id: "conv_chat_advisor", uncertain: false },
-        });
-      if (url.includes("/model-advisor/rounds")) return Response.json(round);
-      throw new Error(`Unexpected request: ${url}`);
-    });
-    const onSend = vi.fn();
-    renderWithTooltips(
-      <Composer
-        {...composerProps({
-          onSend,
-          modelPickerKind: "codex",
-          advisorHostId: "host_1",
-          advisorAgentId: "ag_1",
-          advisorWorkspace: "/repo",
-          advisorHumanPick: { model: "gpt-6.1-sol", accessLane: "codex-direct", effort: "medium" },
-        })}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("chat-model-advisor-toggle"));
-    fireEvent.change(textarea(), { target: { value: "Continue" } });
-    fireEvent.submit(textarea().closest("form")!);
-    expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Run selected model" })).not.toBeInTheDocument();
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith("Continue", undefined));
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    const toggle = screen.getByTestId("chat-model-advisor-toggle");
-    expect(toggle).toBeEnabled();
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-  });
+      fireEvent.change(textarea(), { target: { value: "Continue" } });
+      fireEvent.submit(textarea().closest("form")!);
+      expect(screen.queryByRole("button", { name: "Get recommendation" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Run selected model" })).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(onSend).toHaveBeenCalledWith("Continue", withAttachments ? [file] : undefined),
+      );
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      if (withAttachments) {
+        const posted = advisorFetch.mock.calls.find(([url]) => url === "/v1/model-advisor/rounds")!;
+        expect(JSON.parse((posted[1] as RequestInit).body as string).attachments).toEqual([
+          { filename: "notes.txt", content_type: "text/plain", data: "aGVsbG8=" },
+        ]);
+      }
+      const toggle = screen.getByTestId("chat-model-advisor-toggle");
+      expect(toggle).toBeEnabled();
+      fireEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+    },
+  );
 
   it("opens Recommender settings from the compact chat action without adding controls below the composer", async () => {
     const choice = {

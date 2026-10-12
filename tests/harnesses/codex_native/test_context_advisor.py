@@ -113,7 +113,14 @@ def context(tmp_path, monkeypatch):
 async def run(client, monkeypatch, **kwargs):
     monkeypatch.setattr(app_server, "client_for_transport", lambda *_a, **_kw: client)
     return await advisor.generate_context_advisor_selection(
-        request={"instructions": "Recommend", "task": "Next task", "candidates": []},
+        request={
+            "instructions": "Recommend",
+            "task": "Next task",
+            "candidates": [],
+            "attachments": [
+                {"filename": "screen.png", "image_url": "data:image/png;base64,aGVsbG8="}
+            ],
+        },
         model="current-checkpoint",
         reasoning_effort="low",
         session_id="chat",
@@ -139,6 +146,8 @@ async def test_inherits_prefix_updates_only_child_effort_and_reports_observed_ca
     }
     assert ("thread/settings/update", {"threadId": "child", "effort": "low"}) in client.calls
     start = next(params for method, params in client.calls if method == "turn/start")
+    assert start["input"][1] == {"type": "image", "url": "data:image/png;base64,aGVsbG8="}
+    assert "aGVsbG8=" not in start["input"][0]["text"]
     assert set(start) == {
         "threadId",
         "input",

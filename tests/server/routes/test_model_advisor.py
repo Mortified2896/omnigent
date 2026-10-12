@@ -653,9 +653,12 @@ def test_round_lifecycle_with_confirmation(db_uri) -> None:
         assert len(launched) == 1
 
 
+@pytest.mark.parametrize("attachment_mode", ["none", "supported", "old_host"])
 def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
     db_uri,
+    attachment_mode,
 ) -> None:
+    with_attachments = attachment_mode != "none"
     launched: list[Any] = []
 
     async def launcher(body: Any, *, user_id: str | None, request: Any = None) -> Any:
@@ -669,6 +672,17 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
         ),
         "latency_ms": 800,
     }
+    from omnigent.model_advisor_attachments import (
+        advisor_attachment_context,
+        normalize_attachments,
+    )
+    from omnigent.model_advisor_workflow import document_digest
+
+    attachments = [{"filename": "notes.txt", "content_type": "text/plain", "data": "aGVsbG8="}]
+    if attachment_mode == "supported":
+        reply["attachment_digest"] = document_digest(
+            advisor_attachment_context(normalize_attachments(attachments))
+        )
     client, registry = client_for(
         db_uri,
         reply=reply,
@@ -719,15 +733,26 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
                 "task": "Compare these provider plans",
                 "human_choice_id": PROVIDER_GLM.choice_id,
                 "submission_key": "provider-round",
+                **({"attachments": attachments} if with_attachments else {}),
             },
             headers=JSON_ALICE,
         )
         assert create.status_code == 200
-        payload = _settle(client, create.json()["round_id"])
+        payload = _settle(
+            client, create.json()["round_id"], want_overhead=attachment_mode != "old_host"
+        )
+        if attachment_mode == "old_host":
+            assert payload["state"] == "blocked"
+            assert "Update the connected host" in payload["failure_reason"]
+            assert not launched
+            return
         assert payload["review"]["human_choice_id"] == PROVIDER_GLM.choice_id
         assert payload["review"]["advisor_choice_id"] == PROVIDER_OPENAI.choice_id
         assert payload["review"]["human_candidate_id"] == PROVIDER_GLM.choice_id
         assert registry.advisor_calls == 1
+        if with_attachments:
+            assert registry.advisor_requests[0]["attachments"][0]["text"] == "hello"
+            assert "aGVsbG8=" not in json.dumps(payload)
 
         confirm = client.post(
             f"/v1/model-advisor/rounds/{payload['round_id']}/confirm",
@@ -747,10 +772,17 @@ def test_provider_grouped_round_uses_one_logical_choice_and_qualified_gateway(
         assert confirm.json()["state"] == "dispatch_bound"
         assert len(launched) == 1
         body = launched[0][0]
+        if with_attachments:
+            assert (
+                body.initial_items == []
+            )  # Browser posts text + files through normal upload queue.
         assert body.project_id == "project_1"
         assert body.labels["omnigent.test.run_id"] == "filing-regression"
         assert body.title is None
-        assert body.initial_items[0].data["content"][0]["text"] == "Compare these provider plans"
+        if not with_attachments:
+            assert (
+                body.initial_items[0].data["content"][0]["text"] == "Compare these provider plans"
+            )
         assert body.model_override == "glm/glm-5.3"
         assert body.reasoning_effort == "high"
         assert body.labels["omnigent.advisor.logical_choice_id"] == PROVIDER_GLM.choice_id

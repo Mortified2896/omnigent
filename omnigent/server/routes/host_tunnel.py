@@ -915,6 +915,7 @@ async def _receive_loop(
                         "output_tokens": frame.output_tokens,
                         "cached_input_tokens": frame.cached_input_tokens,
                         "context_session_id": frame.context_session_id,
+                        "attachment_digest": frame.attachment_digest,
                         "response_id": frame.response_id,
                         "error": frame.error,
                     }

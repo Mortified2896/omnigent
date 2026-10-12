@@ -1261,3 +1261,22 @@ it("can save Advisor-off defaults without losing the remembered model choices", 
     providers: { openai: { selected_choice_ids: [LOGICAL_A.choice_id] } },
   });
 });
+
+it.each(["", "Read these notes"])(
+  "includes file bytes in an Advisor round for prompt %j",
+  async (task) => {
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    mountSection({ task, files: [file] });
+    await screen.findByRole("region", { name: "Model advisor settings" });
+    send();
+    await waitFor(() =>
+      expect(api.mock.calls.some(([url]) => url === "/v1/model-advisor/rounds")).toBe(true),
+    );
+    const posted = api.mock.calls.find(([url]) => url === "/v1/model-advisor/rounds")!;
+    const body = JSON.parse((posted[1] as RequestInit).body as string);
+    expect(body.attachments).toEqual([
+      { filename: "notes.txt", content_type: "text/plain", data: "aGVsbG8=" },
+    ]);
+    expect(body.task).toBe(task || "Review the attached files.");
+  },
+);

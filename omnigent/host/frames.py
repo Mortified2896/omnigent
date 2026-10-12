@@ -1050,6 +1050,7 @@ class HostAdvisorCallResultFrame:
     response_id: str | None = None
     error: str | None = None
     context_session_id: str | None = None
+    attachment_digest: str | None = None
 
 
 @dataclass
@@ -1755,6 +1756,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "response_id": frame.response_id,
                 "error": frame.error,
                 "context_session_id": frame.context_session_id,
+                "attachment_digest": frame.attachment_digest,
             }
         )
     if isinstance(frame, HostSkillsFrame):
@@ -2890,6 +2892,7 @@ def _decode_advisor_call_result(msg: _JsonObject) -> HostAdvisorCallResultFrame:
         response_id=_optional_nullable_str(msg, "response_id"),
         error=_optional_nullable_str(msg, "error"),
         context_session_id=_optional_nullable_str(msg, "context_session_id"),
+        attachment_digest=_optional_nullable_str(msg, "attachment_digest"),
     )
 
 

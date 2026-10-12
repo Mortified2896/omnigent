@@ -3912,6 +3912,7 @@ class HostProcess:
         raw output is returned unparsed for server-side validation.
         """
         from omnigent.host.advisor_call import AdvisorCallError, generate_advisor_selection
+        from omnigent.model_advisor_workflow import document_digest
 
         try:
             if frame.context_session_id is not None or frame.context_bridge_id is not None:
@@ -3949,6 +3950,11 @@ class HostProcess:
             cached_input_tokens=result.cached_input_tokens,
             response_id=result.response_id,
             context_session_id=frame.context_session_id,
+            attachment_digest=(
+                document_digest(frame.request["attachments"])
+                if frame.request.get("attachments")
+                else None
+            ),
         )
 
     @staticmethod

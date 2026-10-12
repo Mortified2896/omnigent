@@ -133,6 +133,7 @@ class LogicalFrozenRound:
     keep_chosen_model: bool = True
     task_tags: tuple[str, ...] = ()
     advisor_context: dict[str, str] | None = None
+    attachments: tuple[dict[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         for value in (self.owner_id, self.host_id, self.round_id, self.settings_revision):
@@ -335,6 +336,10 @@ class LogicalFrozenRound:
                 "do not continue its work or execute tools. Select the best allowed choice for "
                 "the new task below using that context. Return only the requested JSON."
             )
+        if self.attachments:
+            from omnigent.model_advisor_attachments import advisor_attachment_context
+
+            request["attachments"] = advisor_attachment_context(self.attachments)
         return request
 
     def preference_for(self, provider: str) -> Preference:
@@ -369,6 +374,8 @@ class LogicalFrozenRound:
             "transport_preferences": [list(item) for item in self.transport_preferences],
             "advisor_transport": self.advisor_transport.to_payload(),
         }
+        if self.attachments:
+            payload["attachments"] = list(self.attachments)
         if self.advisor_context is not None:
             payload["advisor_context"] = self.advisor_context
         if self.schema_version == 3:
@@ -443,7 +450,13 @@ class LogicalFrozenRound:
         )
         optional = {
             key
-            for key in ("continuation", "task_tags", "current_execution", "advisor_context")
+            for key in (
+                "continuation",
+                "task_tags",
+                "current_execution",
+                "advisor_context",
+                "attachments",
+            )
             if key in payload
         }
         if set(payload) != common_keys | extra_keys | optional:
@@ -517,6 +530,7 @@ class LogicalFrozenRound:
         if not isinstance(raw_tags, list):
             raise LogicalAdvisorError("Invalid task tags")
         return cls(
+            attachments=tuple(payload.get("attachments", [])),
             advisor_context=payload.get("advisor_context"),
             current_execution=current_execution,
             continuation_session_id=continuation.get("session_id"),

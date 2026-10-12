@@ -88,6 +88,14 @@ class SavePreferencesRequest(BaseModel):
     expected_version: int = Field(ge=0)
 
 
+class AdvisorAttachmentBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(min_length=1, max_length=1024)
+    content_type: str = Field(max_length=256)
+    data: str = Field(max_length=70_000_000)
+
+
 class CreateRoundRequest(BaseModel):
     host_id: str
     profile: str = "default"
@@ -105,6 +113,7 @@ class CreateRoundRequest(BaseModel):
     )
     continue_session_id: str | None = Field(default=None, min_length=1, max_length=256)
     keep_chosen_model: bool = False
+    attachments: list[AdvisorAttachmentBody] = Field(default_factory=list, max_length=20)
     task_tags: list[str] = Field(default_factory=list, max_length=8)
 
     @field_validator("task_tags")
@@ -290,6 +299,7 @@ def create_model_advisor_router(
             continue_session_id=body.continue_session_id,
             keep_chosen_model=body.keep_chosen_model,
             task_tags=body.task_tags,
+            attachments=[item.model_dump() for item in body.attachments],
             preferences=(
                 _preferences_from_body(body.preferences) if body.preferences is not None else None
             ),
@@ -316,6 +326,7 @@ def create_model_advisor_router(
             preferences=preferences,
             continue_session_id=body.continue_session_id,
             keep_chosen_model=body.keep_chosen_model,
+            attachments=[item.model_dump() for item in body.attachments],
             preview_only=True,
         )
 

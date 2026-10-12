@@ -96,6 +96,8 @@ async def generate_context_advisor_selection(
         raise AdvisorCallError(
             "Resume this chat with the updated native harness before using current-model advice"
         )
+    from omnigent.model_advisor_attachments import advisor_image_inputs
+
     prompt = build_advisor_prompt(request)
     client = client_for_transport(state.socket_path, client_name="omnigent-model-advisor")
     child: str | None = None
@@ -150,7 +152,10 @@ async def generate_context_advisor_selection(
         )
         response = await client.request(
             "turn/start",
-            {"threadId": child, "input": [{"type": "text", "text": prompt}]},
+            {
+                "threadId": child,
+                "input": [{"type": "text", "text": prompt}, *advisor_image_inputs(request)],
+            },
         )
         turn_id = _object(_object(response.get("result")).get("turn")).get("id")
         if not isinstance(turn_id, str) or not turn_id:

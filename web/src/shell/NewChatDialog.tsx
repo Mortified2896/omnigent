@@ -7071,11 +7071,7 @@ export function NewChatLandingScreen() {
               onFlowStateChange={(busy, reviewVisible) =>
                 setAdvisorSubmitting(busy || reviewVisible)
               }
-              submissionBlockReason={
-                files.length > 0
-                  ? "Advisor review cannot send attachments yet. Remove the attachments or turn Advisor off before sending."
-                  : null
-              }
+              files={files}
               advisorModelTarget={advisorSlotEl}
               taskTags={taskTags}
               hostId={selectedHostId}
@@ -7102,6 +7098,16 @@ export function NewChatLandingScreen() {
                   : {}),
               }}
               onLaunched={(sessionId) => {
+                if (files.length > 0) {
+                  setPendingInitialPrompt(sessionId, {
+                    text:
+                      buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
+                      sanitizeInitialPrompt(message),
+                    skill: null,
+                    files: [...files],
+                    ...(taskTags.length > 0 ? { taskTags: [...taskTags] } : {}),
+                  });
+                }
                 queryClient.invalidateQueries({ queryKey: ["projects"] });
                 queryClient.invalidateQueries({ queryKey: ["project-sessions"] });
                 setTaskTags([]);

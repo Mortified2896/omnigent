@@ -1,3 +1,4 @@
+import { advisorAttachmentIdentity, encodeAdvisorAttachments } from "@/lib/advisorAttachments";
 import { PromptTimingStatus } from "@/components/composer/PromptTimingStatus";
 import { startPromptTiming, handoffPromptTiming, type PromptTiming } from "@/lib/promptTiming";
 import { currentModelChoices } from "@/lib/currentModelChoices";
@@ -87,6 +88,7 @@ export interface NewChatAdvisorSectionProps {
   requireConfirmation?: boolean;
   hostId: string | null;
   task: string;
+  files?: File[];
   humanPick: HumanModelPick | null;
   launchAgentId: string | null;
   launchWorkspace: string | null;
@@ -131,6 +133,8 @@ interface RoundFlowState {
   error: string | null;
 }
 
+const NO_FILES: File[] = [];
+
 const IDLE_ROUND: RoundFlowState = { round: null, busy: false, error: null };
 
 function samePreferences(a: ProviderPreferences, b: ProviderPreferences): boolean {
@@ -161,6 +165,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     requireConfirmation = false,
     hostId,
     task,
+    files = NO_FILES,
     humanPick: suppliedHumanPick,
     launchAgentId,
     launchWorkspace,
@@ -479,6 +484,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     const identity = JSON.stringify({
       scope,
       task,
+      attachments: advisorAttachmentIdentity(files),
       humanChoiceId: resolveHumanChoice(),
       preferences: editor.draft,
       continueSessionId,
@@ -501,6 +507,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     scope,
     stopPolling,
     task,
+    files,
     continueSessionId,
     keepChosenModel,
     launchAgentId,
@@ -689,7 +696,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       setRound({ round: null, busy: false, error: submissionBlockReason });
       return;
     }
-    if (task.trim() === "") {
+    if (task.trim() === "" && files.length === 0) {
       setRound({
         round: null,
         busy: false,
@@ -709,19 +716,23 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     const host = hostId;
     const generation = scopeToken.current.generation;
     const inputVersion = inputGeneration.current;
+    const key = submissionKey.current;
     setPromptTiming(startPromptTiming());
     setRound({ round: null, busy: true, error: null });
     void (async () => {
       try {
+        const attachments = await encodeAdvisorAttachments(files);
+        if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         const dto = await createProviderRound(
           host,
           "default",
-          task,
+          task.trim() ? task : "Review the attached files.",
           resolvedHumanChoiceId,
           editor.draft!,
-          submissionKey.current!,
+          key,
           continueSessionId ? { sessionId: continueSessionId, keepChosenModel } : undefined,
           taskTags,
+          attachments,
         );
         if (!isCurrentScope(host, generation) || inputGeneration.current !== inputVersion) return;
         setRound({ round: dto, busy: true, error: null });
@@ -746,6 +757,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     round.busy,
     task,
     taskTags,
+    files,
     submissionBlockReason,
     validation,
   ]);
@@ -1057,6 +1069,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         continueSessionId,
         keepChosenModel,
         humanPick,
+        advisorAttachmentIdentity(files),
       ])}
       onPreviewPrompt={async () => {
         const humanChoiceId = resolveHumanChoice();
@@ -1068,6 +1081,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           humanChoiceId,
           editor.draft,
           continueSessionId ? { sessionId: continueSessionId, keepChosenModel } : undefined,
+          await encodeAdvisorAttachments(files),
         );
         return result.prompt;
       }}

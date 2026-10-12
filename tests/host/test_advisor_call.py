@@ -113,6 +113,8 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     async def fake_exec(*args: Any, **kwargs: Any) -> FakeProcess:
         argv = args[1:]
         captured["argv"] = argv
+        if "--image" in argv:
+            captured["image_bytes"] = Path(argv[argv.index("--image") + 1]).read_bytes()
         captured["env"] = kwargs.get("env")
         schema_path = argv[argv.index("--output-schema") + 1]
         captured["output_schema"] = Path(schema_path).read_text()
@@ -137,6 +139,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     monkeypatch.setattr(advisor_call.asyncio, "create_subprocess_exec", fake_exec)
 
     request = {
+        "attachments": [{"filename": "screen.png", "image_url": "data:image/png;base64,aGVsbG8="}],
         "instructions": "Select exactly one allowed candidate.",
         "task": "Do the thing",
         "candidates": [{"candidate_id": "choice-a"}],
@@ -168,6 +171,8 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     assert f"model_max_output_tokens={ADVISOR_MAX_OUTPUT_TOKENS}" in argv
     assert 'model_reasoning_effort="high"' in argv
     assert argv[argv.index("--model") + 1] == "glm-5.3"
+    assert captured["image_bytes"] == b"hello"
+    assert "aGVsbG8=" not in captured["stdin"]
     assert argv[-1] == "-", "the prompt must travel over stdin, not argv"
     disable_values = [
         argv[index + 1] for index, item in enumerate(argv[:-1]) if item == "--disable"

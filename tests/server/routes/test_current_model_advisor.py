@@ -50,8 +50,9 @@ def preferences(choice):
     "choice,lane", [(PROVIDER_OPENAI, "codex-direct"), (PROVIDER_GLM, "glm-direct")]
 )
 @pytest.mark.parametrize("context_ack", ["conv_current", None, "different-chat"])
+@pytest.mark.parametrize("with_attachments", [False, True])
 def test_current_model_round_inherits_owned_running_chat_and_retains_its_connection(
-    db_uri, choice, lane, context_ack
+    db_uri, choice, lane, context_ack, with_attachments
 ):
     conversation = SimpleNamespace(
         id="conv_current",
@@ -64,6 +65,18 @@ def test_current_model_round_inherits_owned_running_chat_and_retains_its_connect
         model_override=None,
         reported_model=choice.model_id,
         reasoning_effort=choice.reasoning_effort,
+    )
+    from omnigent.model_advisor_attachments import (
+        advisor_attachment_context,
+        normalize_attachments,
+    )
+    from omnigent.model_advisor_workflow import document_digest
+
+    attachments = [{"filename": "notes.txt", "content_type": "text/plain", "data": "aGVsbG8="}]
+    digest = (
+        document_digest(advisor_attachment_context(normalize_attachments(attachments)))
+        if with_attachments
+        else None
     )
     store = _FakeConversationStore(conversation)
     client, registry = client_for(
@@ -83,6 +96,7 @@ def test_current_model_round_inherits_owned_running_chat_and_retains_its_connect
                         input_tokens=10000,
                         cached_input_tokens=9000,
                         context_session_id=context_ack,
+                        attachment_digest=digest,
                     )
                 )
             )
@@ -106,6 +120,7 @@ def test_current_model_round_inherits_owned_running_chat_and_retains_its_connect
             "human_choice_id": choice.choice_id,
             "continue_session_id": conversation.id,
             "submission_key": "current-round",
+            **({"attachments": attachments} if with_attachments else {}),
         }
         rejected = client.post(
             "/v1/model-advisor/rounds",
@@ -133,6 +148,8 @@ def test_current_model_round_inherits_owned_running_chat_and_retains_its_connect
             conversation.id,
             "bridge-current",
         )
+        if with_attachments:
+            assert frame.request["attachments"][0]["text"] == "hello"
         assert frame.model == choice.model_id
         assert frame.access_lane == lane
         assert frame.reasoning_effort == choice.reasoning_effort

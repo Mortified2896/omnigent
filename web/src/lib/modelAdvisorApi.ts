@@ -2,6 +2,7 @@
  * round state are always server-derived; the browser sends only ids, the
  * task text and launch context. Conflicts surface as AdvisorConflictError.
  */
+import type { AdvisorAttachment } from "./advisorAttachments";
 import { authenticatedFetch } from "@/lib/identity";
 import { normalizeProviderPreferences } from "@/model-advisor/providerPreferences";
 import type { ReviewView } from "@/model-advisor/ModelAdvisorPanel";
@@ -302,6 +303,7 @@ export async function createProviderRound(
   submissionKey: string,
   continuation?: { sessionId: string; keepChosenModel: boolean },
   taskTags?: string[],
+  attachments?: AdvisorAttachment[],
 ): Promise<RoundDto> {
   return advisorFetch<RoundDto>("/v1/model-advisor/rounds", {
     method: "POST",
@@ -313,6 +315,7 @@ export async function createProviderRound(
       human_choice_id: humanChoiceId,
       submission_key: submissionKey,
       preferences,
+      ...(attachments?.length ? { attachments } : {}),
       ...(taskTags?.length ? { task_tags: taskTags } : {}),
       ...(continuation
         ? {
@@ -330,6 +333,7 @@ export async function previewAdvisorPrompt(
   humanChoiceId: string,
   preferences: ProviderPreferences,
   continuation?: { sessionId: string; keepChosenModel: boolean },
+  attachments?: AdvisorAttachment[],
 ): Promise<{ prompt: string }> {
   return advisorFetch("/v1/model-advisor/prompt", {
     method: "POST",
@@ -339,6 +343,7 @@ export async function previewAdvisorPrompt(
       task,
       human_choice_id: humanChoiceId,
       preferences,
+      ...(attachments?.length ? { attachments } : {}),
       ...(continuation
         ? {
             continue_session_id: continuation.sessionId,

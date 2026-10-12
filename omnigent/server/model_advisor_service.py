@@ -796,6 +796,7 @@ class ModelAdvisorService:
         continue_session_id: str | None = None,
         keep_chosen_model: bool = False,
         task_tags: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         preview_only: bool = False,
     ) -> dict[str, Any]:
         owner = self.owner_id(user_id)
@@ -804,6 +805,12 @@ class ModelAdvisorService:
         )
         if not isinstance(task, str) or not task.strip() or len(task) > 200_000:
             raise HTTPException(status_code=422, detail="A nonempty initial task is required")
+        from omnigent.model_advisor_attachments import normalize_attachments
+
+        try:
+            frozen_attachments = await asyncio.to_thread(normalize_attachments, attachments or [])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
         catalog = await self.load_catalog(user_id, host_id)
         current_execution = None
         current = next(
@@ -899,6 +906,7 @@ class ModelAdvisorService:
                 "submission_key": identity_key,
                 **({"advisor_context": advisor_context} if advisor_context else {}),
                 **({"task_tags": task_tags} if task_tags else {}),
+                **({"attachments": frozen_attachments} if frozen_attachments else {}),
                 **(
                     {
                         "continue_session_id": continue_session_id,
@@ -953,6 +961,7 @@ class ModelAdvisorService:
             continuation_session_id=continue_session_id,
             keep_chosen_model=keep_chosen_model,
             task_tags=tuple(task_tags or ()),
+            attachments=frozen_attachments,
         )
         if preview_only:
             from omnigent.host.advisor_call import build_advisor_prompt
@@ -1052,6 +1061,13 @@ class ModelAdvisorService:
                 await record_attempt("failed", reason=reason)
                 self._finish_advisor_failure(owner, host_id, round_id, reason)
                 return
+            if frozen.attachments and result.get("attachment_digest") != document_digest(
+                frozen.advisor_input()["attachments"]
+            ):
+                reason = "Update the connected host to support Advisor attachments"
+                await record_attempt("failed", reason=reason)
+                self._finish_advisor_failure(owner, host_id, round_id, reason)
+                return
             if (
                 frozen.advisor_context is not None
                 and result.get("context_session_id") != frozen.advisor_context["session_id"]
@@ -1104,6 +1120,7 @@ class ModelAdvisorService:
         continue_session_id: str | None = None,
         keep_chosen_model: bool = False,
         task_tags: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         preferences: AdvisorPreferences | ProviderPreferences | None = None,
     ) -> dict[str, Any]:
         if isinstance(preferences, ProviderPreferences) or human_choice_id is not None:
@@ -1119,10 +1136,13 @@ class ModelAdvisorService:
                 continue_session_id=continue_session_id,
                 keep_chosen_model=keep_chosen_model,
                 task_tags=task_tags,
+                attachments=attachments,
                 preferences=(
                     preferences if isinstance(preferences, ProviderPreferences) else None
                 ),
             )
+        if attachments:
+            raise HTTPException(422, "Attachments require provider Advisor settings")
         owner = self.owner_id(user_id)
         self._validated_profile(profile)
         self._authorized_host(user_id, host_id)
@@ -1681,6 +1701,10 @@ class ModelAdvisorService:
 
         def body_for(route: QualifiedRoute) -> SessionCreateRequest:
             labels = labels_for(route)
+            # The browser hands attachment-bearing drafts to the ordinary
+            # upload/send queue after binding. Do not start a text-only turn
+            # before its files arrive; normal upload ACLs and retry recovery
+            # remain authoritative for the answer.
             return SessionCreateRequest(
                 agent_id=launch["agent_id"],
                 initial_items=[
@@ -1697,7 +1721,9 @@ class ModelAdvisorService:
                             ),
                         },
                     )
-                ],
+                ]
+                if not frozen.attachments
+                else [],
                 project_id=launch.get("project_id"),
                 labels=labels,
                 host_id=host_id,
