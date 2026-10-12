@@ -263,7 +263,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       selectionId: JEV_ROUTER_KEY,
       displayName: "Jev Router",
       groupLabel: "Routing",
-      description: "Current prompt · models enabled in Settings · OpenRouter",
+      description: "Current prompt · models enabled in Settings · OpenCode / OpenRouter",
       keywords: ["jev", "typesafe", "router", "routing", "openrouter"],
     });
     result.unshift({
@@ -1348,8 +1348,8 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const currentModelContextNote = usesJevRouter ? (
     <p className="text-sm text-muted-foreground" data-testid="model-advisor-jev-context">
       Jev Router receives the current prompt and the model and reasoning choices enabled in
-      Settings. It uses the host’s OpenRouter API key. Your selected connection and approval
-      settings still apply.
+      Settings. It uses the host’s OpenCode Zen or OpenRouter API key. Your selected connection and
+      approval settings still apply.
     </p>
   ) : usesCurrentModel ? (
     <p className="text-sm text-muted-foreground" data-testid="model-advisor-current-context">

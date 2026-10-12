@@ -20,6 +20,19 @@ JEV_MODEL = "typesafe/jev-1.13"
 JEV_ACCESS_LANE = "jev-openrouter-decisions"
 JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 JEV_TIMEOUT_SECONDS = 30.0
+JEV_ZEN_ENDPOINT = "https://opencode.ai/zen/v1/systemone"
+JEV_ZEN_MODEL = "jev-1.13"
+
+
+def _opencode_key() -> str | None:
+    from omnigent.onboarding.secrets import load_secret
+    from omnigent.util.env_credentials import getenv_with_omnigent_prefix
+
+    value = getenv_with_omnigent_prefix("OPENCODE_API_KEY")
+    if value and value[1].strip():
+        return value[1].strip()
+    stored = load_secret("jev-opencode")
+    return stored.strip() if stored and stored.strip() else None
 
 
 class JevChoiceQuestion(TypedDict):
@@ -152,20 +165,25 @@ def parse_jev_response(payload: object, criteria: dict[str, str]) -> str:
 async def generate_jev_selection(*, request: dict[str, object]) -> AdvisorCallResult:
     body = build_jev_request(request)
     try:
-        key = _openrouter_key()
+        key = _opencode_key()
+        endpoint = JEV_ZEN_ENDPOINT if key else JEV_ENDPOINT
+        if key:
+            body["model"] = JEV_ZEN_MODEL
+        else:
+            key = _openrouter_key()
     except AdvisorCallError:
         raise
     except Exception as exc:
         # Provider configuration errors can contain secret references. Do not
         # return arbitrary exception/HTTP response bodies to the UI or logs.
-        raise AdvisorCallError("Could not resolve the host's OpenRouter credential") from exc
+        raise AdvisorCallError("Could not resolve the host's Jev credential") from exc
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(
             timeout=JEV_TIMEOUT_SECONDS, follow_redirects=False
         ) as client:
             response = await client.post(
-                JEV_ENDPOINT,
+                endpoint,
                 headers={"Authorization": f"Bearer {key}"},
                 json=body,
             )

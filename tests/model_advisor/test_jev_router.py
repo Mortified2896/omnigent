@@ -195,3 +195,34 @@ async def test_host_dispatches_jev_without_starting_codex_or_inheriting_session(
     result = await host._handle_advisor_call(replace(frame, context_session_id="private-parent"))
     assert result.status == "failed"
     assert len(calls) == 1
+
+
+@pytest.fixture(autouse=True)
+def isolate_jev_credentials(monkeypatch):
+    monkeypatch.setattr("omnigent.host.jev_router._opencode_key", lambda: None)
+
+
+async def test_opencode_uses_zen_endpoint_and_keeps_exact_settings_choices(monkeypatch):
+    from omnigent.host.jev_router import JEV_ZEN_ENDPOINT, JEV_ZEN_MODEL
+
+    body = build_jev_request(jev_round().advisor_input())
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        assert str(req.url) == JEV_ZEN_ENDPOINT
+        assert req.headers["authorization"] == "Bearer fixture-zen-key"
+        posted = json.loads(req.content)
+        assert posted == {**body, "model": JEV_ZEN_MODEL}
+        return httpx.Response(200, json=response(body["questions"]["route"]["criteria"]))
+
+    def forbidden():
+        raise AssertionError("A Zen request must not resolve an OpenRouter key")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr("omnigent.host.jev_router.httpx.AsyncClient", lambda **kwargs: client)
+    monkeypatch.setattr("omnigent.host.jev_router._opencode_key", lambda: "fixture-zen-key")
+    monkeypatch.setattr("omnigent.host.jev_router._openrouter_key", forbidden)
+    result = await generate_jev_selection(request=jev_round().advisor_input())
+    assert len(calls) == 1
+    assert json.loads(result.raw_output)["candidate_id"] == OPENAI_LOW.choice_id

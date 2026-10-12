@@ -81,16 +81,18 @@ pool settings constrain Advisor recommendations, not the user's manual controls.
 
 **Jev Router** is selectable in the Recommender model picker. Selecting it
 defaults to using Jev's recommendation (0% human assignment); the comparison
-balance remains editable in Settings. Its one bounded OpenRouter Decisions API
-call uses `typesafe/jev-1.13` and receives only the current prompt plus the exact
+balance remains editable in Settings. Its one bounded decision call uses Jev 1.13 through OpenCode Zen or
+OpenRouter and receives only the current prompt plus the exact
 enabled model and reasoning choices from Settings. Chat history, attachments,
 human proposals, tags, connection preferences and approval rules are not sent
 to Jev. The prompt preview shows that actual decision request. The selected
 model still runs through the existing connection and approval settings.
 
-Jev uses the execution host's `OPENROUTER_API_KEY` (including the Omnigent
-prefixed form), or the credential of an explicitly configured OpenRouter
-provider. Missing credentials, timeouts and invalid/outside-pool decisions
+Jev prefers the execution host's `OPENCODE_API_KEY` or the `jev-opencode`
+Omnigent secret and calls OpenCode Zen's `/zen/v1/systemone` with `jev-1.13`.
+Otherwise it uses `OPENROUTER_API_KEY` (including Omnigent prefixed variables)
+or an explicitly configured OpenRouter provider. There is no transport fallback
+after a failed call. Missing credentials, timeouts and invalid/outside-pool decisions
 block the round without a generative fallback or automatic replay. The visible
 receipt reports Jev's confidence and selected-choice probability; Jev does not
 generate a prose rationale or suggest task tags. See the [Decisions API
