@@ -108,7 +108,7 @@ class ProviderPreferences:
     human_probability_percent: int = 50
     unresolved_legacy_ids: tuple[str, ...] = ()
     route_review_required: tuple[Provider, ...] = ()
-    advisor_model_mode: Literal["selected", "current"] = "selected"
+    advisor_model_mode: Literal["selected", "current", "jev"] = "selected"
     advisor_reasoning_effort: str | None = None
 
     def __post_init__(self) -> None:
@@ -120,7 +120,7 @@ class ProviderPreferences:
             raise ProviderPolicyError("Expected per-provider selections")
         if self.advisor_choice_id is not None:
             _text(self.advisor_choice_id)
-        if self.advisor_model_mode not in ("selected", "current"):
+        if self.advisor_model_mode not in ("selected", "current", "jev"):
             raise ProviderPolicyError("Unsupported advisor model mode")
         if self.advisor_reasoning_effort is not None:
             _text(self.advisor_reasoning_effort)

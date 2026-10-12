@@ -117,11 +117,11 @@ class LogicalFrozenRound:
     settings_revision: str
     task: str
     pool: tuple[LogicalChoice, ...]
-    advisor: LogicalChoice
+    advisor: LogicalChoice | None
     human_choice_id: str
     human_probability_percent: int
     transport_preferences: tuple[tuple[str, Preference], ...]
-    advisor_transport: TransportPlan
+    advisor_transport: TransportPlan | None
     schema_version: Literal[2, 3] = 3
     catalog_revision: str | None = None
     qualified_pool: tuple[LogicalChoice, ...] = ()
@@ -179,7 +179,16 @@ class LogicalFrozenRound:
         choices = {choice.choice_id: choice for choice in self.pool}
         if self.human_choice_id not in choices:
             raise LogicalAdvisorError("Human proposal is outside the frozen logical pool")
-        if self.advisor_transport.choice != self.advisor:
+        if self.uses_jev_router:
+            if (
+                self.schema_version != 3
+                or self.advisor is not None
+                or self.advisor_transport is not None
+            ):
+                raise LogicalAdvisorError("Jev routing must not bind a generative advisor")
+        elif self.advisor is None or self.advisor_transport is None:
+            raise LogicalAdvisorError("A generative advisor requires its own choice and route")
+        elif self.advisor_transport.choice != self.advisor:
             raise LogicalAdvisorError("Advisor route is for another logical choice")
         if (
             type(self.human_probability_percent) is not int
@@ -233,7 +242,7 @@ class LogicalFrozenRound:
                 raise LogicalAdvisorError("Advisor-visible pool must match user-enabled choices")
             if not visible_ids <= qualified_ids:
                 raise LogicalAdvisorError("Advisor-visible choices exceed the qualified catalog")
-            if self.advisor.choice_id not in qualified_ids:
+            if self.advisor is not None and self.advisor.choice_id not in qualified_ids:
                 raise LogicalAdvisorError("Advisor executor is outside the qualified catalog")
             if any(
                 reason
@@ -249,6 +258,21 @@ class LogicalFrozenRound:
             exclusion_ids = [choice_id for choice_id, _reason in self.excluded_choices]
             if len(set(exclusion_ids)) != len(exclusion_ids):
                 raise LogicalAdvisorError("Duplicate frozen choice exclusion")
+
+    @property
+    def uses_jev_router(self) -> bool:
+        return bool(
+            self.preferences_snapshot and self.preferences_snapshot.advisor_model_mode == "jev"
+        )
+
+    @property
+    def advisor_model_id(self) -> str:
+        if self.uses_jev_router:
+            from omnigent.host.jev_router import JEV_MODEL
+
+            return JEV_MODEL
+        assert self.advisor is not None
+        return self.advisor.model_id
 
     @property
     def fingerprint(self) -> str:
@@ -271,8 +295,8 @@ class LogicalFrozenRound:
             "advisor.visible_pool_size": len(self.pool),
             "advisor.visible_pool_digest": self.visible_pool_digest,
             "advisor.human_choice_id": self.human_choice_id,
-            "advisor.executor_choice_id": self.advisor.choice_id,
-            "advisor.executor_model_id": self.advisor.model_id,
+            "advisor.executor_choice_id": self.advisor.choice_id if self.advisor else "jev-router",
+            "advisor.executor_model_id": self.advisor_model_id,
         }
 
     def decision_context_payload(self) -> dict[str, object] | None:
@@ -312,14 +336,18 @@ class LogicalFrozenRound:
             "excluded_choices": excluded,
             "visible_pool_digest": self.visible_pool_digest,
             "human_choice_id": self.human_choice_id,
-            "advisor_executor_choice_id": self.advisor.choice_id,
-            "advisor_executor_model_id": self.advisor.model_id,
+            "advisor_executor_choice_id": self.advisor.choice_id if self.advisor else None,
+            "advisor_executor_model_id": self.advisor_model_id,
         }
 
     def advisor_input(self) -> dict[str, object]:
         # Routes, account keys, preferences and the human proposal are absent
         # by construction.  Transport is resolved after the logical proposal.
         request = advisor_input(self.task, self.pool)
+        if self.uses_jev_router:
+            # Jev receives only this prompt and the exact Settings choices.
+            # Parent context, attachments, tags and connection data stay local.
+            return request
         if self.continuation_session_id is None:
             request["suggest_task_tags"] = True
             request["instructions"] += (
@@ -368,11 +396,15 @@ class LogicalFrozenRound:
                 "provider": self.advisor.provider,
                 "model_id": self.advisor.model_id,
                 "reasoning_effort": self.advisor.reasoning_effort,
-            },
+            }
+            if self.advisor is not None
+            else None,
             "human_choice_id": self.human_choice_id,
             "human_probability_percent": self.human_probability_percent,
             "transport_preferences": [list(item) for item in self.transport_preferences],
-            "advisor_transport": self.advisor_transport.to_payload(),
+            "advisor_transport": self.advisor_transport.to_payload()
+            if self.advisor_transport
+            else None,
         }
         if self.attachments:
             payload["attachments"] = list(self.attachments)
@@ -477,7 +509,7 @@ class LogicalFrozenRound:
         )
         if len(preferences) != len(raw_preferences):
             raise LogicalAdvisorError("Invalid frozen connection preference")
-        advisor = LogicalChoice(**payload["advisor"])
+        advisor = LogicalChoice(**payload["advisor"]) if payload["advisor"] is not None else None
         qualified_pool: tuple[LogicalChoice, ...] = ()
         user_enabled_pool: tuple[LogicalChoice, ...] = ()
         excluded_choices: tuple[tuple[str, ExclusionReason], ...] = ()
@@ -546,7 +578,11 @@ class LogicalFrozenRound:
             human_choice_id=payload["human_choice_id"],
             human_probability_percent=payload["human_probability_percent"],
             transport_preferences=preferences,
-            advisor_transport=TransportPlan.from_payload(payload["advisor_transport"]),
+            advisor_transport=(
+                TransportPlan.from_payload(payload["advisor_transport"])
+                if payload["advisor_transport"] is not None
+                else None
+            ),
             schema_version=version,
             catalog_revision=payload.get("catalog_revision"),
             qualified_pool=qualified_pool,
@@ -575,13 +611,15 @@ def freeze_logical_round(
     by_id = {choice.choice_id: choice for choice in pool}
     if human_choice_id not in by_id:
         raise LogicalAdvisorError("Human choice is outside the active logical answer pool")
-    advisor = resolve_advisor(preferences, catalog, current_choice=current_choice)
-    advisor_routes = routes_by_choice.get(advisor.choice_id, ())
-    advisor_plan = plan_transport(
-        advisor,
-        preferences.group(advisor.provider).transport_preference,
-        advisor_routes,
-    )
+    advisor = None
+    advisor_plan = None
+    if preferences.advisor_model_mode != "jev":
+        advisor = resolve_advisor(preferences, catalog, current_choice=current_choice)
+        advisor_plan = plan_transport(
+            advisor,
+            preferences.group(advisor.provider).transport_preference,
+            routes_by_choice.get(advisor.choice_id, ()),
+        )
     return LogicalFrozenRound(
         owner_id=owner_id,
         host_id=host_id,

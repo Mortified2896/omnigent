@@ -65,7 +65,7 @@ class ProviderPreferencesBody(BaseModel):
     human_probability_percent: int = Field(ge=0, le=100, default=50)
     unresolved_legacy_ids: list[str] = Field(max_length=128, default_factory=list)
     route_review_required: list[Literal["openai", "glm"]] = Field(default_factory=list)
-    advisor_model_mode: Literal["selected", "current"] = "selected"
+    advisor_model_mode: Literal["selected", "current", "jev"] = "selected"
     advisor_reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
 
     @model_validator(mode="after")

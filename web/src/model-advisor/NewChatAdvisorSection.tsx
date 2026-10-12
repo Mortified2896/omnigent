@@ -64,6 +64,7 @@ import { readSessionAdvisorChoices, writeSessionAdvisorChoices } from "./session
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 180_000;
 const CURRENT_MODEL_KEY = "__current_model__";
+const JEV_ROUTER_KEY = "__jev_router__";
 
 function newSubmissionKey(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -216,6 +217,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const submissionKey = useRef<string | null>(null);
 
   const usesCurrentModel = editor.draft?.advisor_model_mode === "current";
+  const usesJevRouter = editor.draft?.advisor_model_mode === "jev";
   const currentAdvisorChoices = useMemo(
     () => options.filter((option) => humanPick && option.model_ids.includes(humanPick.model)),
     [options, humanPick],
@@ -229,14 +231,17 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       )
     : selectedAdvisor;
   const savedAdvisorUnavailable = Boolean(
+    !usesJevRouter &&
     (usesCurrentModel || editor.draft?.advisor_choice_id) &&
     (!savedAdvisor || !savedAdvisor.available),
   );
-  const advisorModelValue = usesCurrentModel
-    ? CURRENT_MODEL_KEY
-    : savedAdvisor
-      ? advisorModelKey(savedAdvisor)
-      : (editor.draft?.advisor_choice_id ?? "");
+  const advisorModelValue = usesJevRouter
+    ? JEV_ROUTER_KEY
+    : usesCurrentModel
+      ? CURRENT_MODEL_KEY
+      : savedAdvisor
+        ? advisorModelKey(savedAdvisor)
+        : (editor.draft?.advisor_choice_id ?? "");
   // Shared model presentation: the same row/group/route vocabulary the primary
   // picker renders, adapted to the advisor's logical (one row per checkpoint,
   // routes shown per row) persistence model.
@@ -254,6 +259,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       keywords: row.keywords,
     }));
     result.unshift({
+      id: JEV_ROUTER_KEY,
+      selectionId: JEV_ROUTER_KEY,
+      displayName: "Jev Router",
+      groupLabel: "Routing",
+      description: "Current prompt · models enabled in Settings · OpenRouter",
+      keywords: ["jev", "typesafe", "router", "routing", "openrouter"],
+    });
+    result.unshift({
       id: CURRENT_MODEL_KEY,
       selectionId: CURRENT_MODEL_KEY,
       displayName: "Current model",
@@ -266,7 +279,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         : "Select an available execution model first",
       keywords: ["current", "context", "cache"],
     });
-    if (!usesCurrentModel && !savedAdvisor && editor.draft?.advisor_choice_id) {
+    if (!usesCurrentModel && !usesJevRouter && !savedAdvisor && editor.draft?.advisor_choice_id) {
       result.unshift({
         id: editor.draft.advisor_choice_id,
         selectionId: editor.draft.advisor_choice_id,
@@ -281,6 +294,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     editor.draft?.advisor_choice_id,
     savedAdvisor,
     usesCurrentModel,
+    usesJevRouter,
     currentAdvisorChoices,
   ]);
   const savedAdvisorRow = savedAdvisor
@@ -467,7 +481,7 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
     } catch (cause) {
       return cause instanceof Error ? cause.message : "Select at least one active answer.";
     }
-    if (savedAdvisorUnavailable || !savedAdvisor) {
+    if (!usesJevRouter && (savedAdvisorUnavailable || !savedAdvisor)) {
       return "Choose an available advisor model and reasoning level.";
     }
     const resolvedHumanChoiceId = resolveHumanChoice();
@@ -478,7 +492,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       return "Choose an allowed model and reasoning level in the composer.";
     }
     return null;
-  }, [editor.draft, options, resolveHumanChoice, savedAdvisor, savedAdvisorUnavailable]);
+  }, [
+    editor.draft,
+    options,
+    resolveHumanChoice,
+    savedAdvisor,
+    savedAdvisorUnavailable,
+    usesJevRouter,
+  ]);
 
   useEffect(() => {
     const identity = JSON.stringify({
@@ -1218,6 +1239,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
           searchTestId="model-advisor-advisor-choice-search"
           disabled={disabled || round.busy || saving || !editor.draft.enabled}
           onValueChange={(modelKey) => {
+            if (modelKey === JEV_ROUTER_KEY && editor.draft) {
+              handleChange({
+                ...editor.draft,
+                advisor_model_mode: "jev",
+                human_probability_percent: 0,
+              });
+              return;
+            }
             if (modelKey === CURRENT_MODEL_KEY && editor.draft) {
               const choice = reconcileAdvisorChoice(
                 currentAdvisorChoices,
@@ -1248,43 +1277,45 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
               });
           }}
         />
-        <ComposerEffortPicker
-          value={
-            usesCurrentModel
-              ? (editor.draft.advisor_reasoning_effort ?? null)
-              : (savedAdvisor?.reasoning_effort ?? null)
-          }
-          options={savedAdvisorEffortOptions.map((option) => ({
-            value: option.value,
-            label: option.label,
-          }))}
-          disabled={
-            disabled ||
-            round.busy ||
-            saving ||
-            savedAdvisorEffortOptions.length === 0 ||
-            !editor.draft.enabled
-          }
-          label="Recommender reasoning effort"
-          testIdPrefix="model-advisor-advisor"
-          testId="model-advisor-advisor-effort"
-          onSelect={(effort) => {
-            if (editor.draft && usesCurrentModel) {
-              if (
-                currentAdvisorChoices.some(
-                  (option) => option.available && option.reasoning_effort === effort,
-                )
-              )
-                handleChange({ ...editor.draft, advisor_reasoning_effort: effort });
-              return;
+        {!usesJevRouter ? (
+          <ComposerEffortPicker
+            value={
+              usesCurrentModel
+                ? (editor.draft.advisor_reasoning_effort ?? null)
+                : (savedAdvisor?.reasoning_effort ?? null)
             }
-            if (!editor.draft || !savedAdvisorRow) return;
-            const choice = savedAdvisorRow.choices.find(
-              (option) => option.available && option.reasoning_effort === effort,
-            );
-            if (choice) handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
-          }}
-        />
+            options={savedAdvisorEffortOptions.map((option) => ({
+              value: option.value,
+              label: option.label,
+            }))}
+            disabled={
+              disabled ||
+              round.busy ||
+              saving ||
+              savedAdvisorEffortOptions.length === 0 ||
+              !editor.draft.enabled
+            }
+            label="Recommender reasoning effort"
+            testIdPrefix="model-advisor-advisor"
+            testId="model-advisor-advisor-effort"
+            onSelect={(effort) => {
+              if (editor.draft && usesCurrentModel) {
+                if (
+                  currentAdvisorChoices.some(
+                    (option) => option.available && option.reasoning_effort === effort,
+                  )
+                )
+                  handleChange({ ...editor.draft, advisor_reasoning_effort: effort });
+                return;
+              }
+              if (!editor.draft || !savedAdvisorRow) return;
+              const choice = savedAdvisorRow.choices.find(
+                (option) => option.available && option.reasoning_effort === effort,
+              );
+              if (choice) handleChange({ ...editor.draft, advisor_choice_id: choice.choice_id });
+            }}
+          />
+        ) : null}
       </div>
       {savedAdvisorUnavailable ? (
         <p role="alert" className="col-span-2 text-xs text-destructive">
@@ -1314,7 +1345,13 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       </Button>
     </div>
   );
-  const currentModelContextNote = usesCurrentModel ? (
+  const currentModelContextNote = usesJevRouter ? (
+    <p className="text-sm text-muted-foreground" data-testid="model-advisor-jev-context">
+      Jev Router receives the current prompt and the model and reasoning choices enabled in
+      Settings. It uses the host’s OpenRouter API key. Your selected connection and approval
+      settings still apply.
+    </p>
+  ) : usesCurrentModel ? (
     <p className="text-sm text-muted-foreground" data-testid="model-advisor-current-context">
       {continueSessionId
         ? "The Advisor uses this chat’s current model and existing context. Its reasoning level is separate from the execution reasoning level. Changing reasoning can reduce cache reuse."

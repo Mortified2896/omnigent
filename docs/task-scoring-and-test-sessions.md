@@ -79,6 +79,23 @@ the confirmed round and existing response attribution stay unchanged. Later
 ordinary turns do not inherit an Advisor review of the initial prompt. Advisor
 pool settings constrain Advisor recommendations, not the user's manual controls.
 
+**Jev Router** is selectable in the Recommender model picker. Selecting it
+defaults to using Jev's recommendation (0% human assignment); the comparison
+balance remains editable in Settings. Its one bounded OpenRouter Decisions API
+call uses `typesafe/jev-1.13` and receives only the current prompt plus the exact
+enabled model and reasoning choices from Settings. Chat history, attachments,
+human proposals, tags, connection preferences and approval rules are not sent
+to Jev. The prompt preview shows that actual decision request. The selected
+model still runs through the existing connection and approval settings.
+
+Jev uses the execution host's `OPENROUTER_API_KEY` (including the Omnigent
+prefixed form), or the credential of an explicitly configured OpenRouter
+provider. Missing credentials, timeouts and invalid/outside-pool decisions
+block the round without a generative fallback or automatic replay. The visible
+receipt reports Jev's confidence and selected-choice probability; Jev does not
+generate a prose rationale or suggest task tags. See the [Decisions API
+example](https://openrouter.ai/blog/insights/what-is-jev/).
+
 **Advanced options** exposes **Open side chat** or **Reopen side chat**. This keeps
 the existing saved feedback fork and explicit acceptance of suggested edits.
 Continuing in the original session avoids a new fork and preserves more of the

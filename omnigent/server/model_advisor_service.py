@@ -661,7 +661,7 @@ class ModelAdvisorService:
                         detail=f"Saved logical choice {choice_id!r} is not currently qualified",
                     )
         if (
-            preferences.advisor_model_mode != "current"
+            preferences.advisor_model_mode == "selected"
             and preferences.advisor_choice_id is not None
             and preferences.advisor_choice_id not in by_id
         ):
@@ -936,6 +936,7 @@ class ModelAdvisorService:
                 current_choice=current,
             )
             if advisor_context is not None:
+                assert frozen.advisor is not None
                 # Context advice runs on the parent's existing connection/account,
                 # independently of the answer-pool connection preferences.
                 advisor_plan = plan_transport(
@@ -965,10 +966,17 @@ class ModelAdvisorService:
         )
         if preview_only:
             from omnigent.host.advisor_call import build_advisor_prompt
+            from omnigent.host.jev_router import build_jev_request
 
             return {
                 "object": "model_advisor.prompt",
-                "prompt": build_advisor_prompt(frozen.advisor_input()),
+                "prompt": (
+                    json.dumps(
+                        build_jev_request(frozen.advisor_input()), ensure_ascii=False, indent=2
+                    )
+                    if frozen.uses_jev_router
+                    else build_advisor_prompt(frozen.advisor_input())
+                ),
             }
         try:
             claim = await asyncio.to_thread(
@@ -998,16 +1006,18 @@ class ModelAdvisorService:
                 await _run_advisor(span)
 
         async def _run_advisor(span: Any) -> None:
-            route = frozen.advisor_transport.primary
+            from omnigent.host.jev_router import JEV_ACCESS_LANE, JEV_MODEL
+
+            route = frozen.advisor_transport.primary if frozen.advisor_transport else None
 
             async def record_attempt(status: str, *, reason: str | None = None) -> None:
                 attempt = {
                     "phase": "advisor",
-                    "transport": route.transport,
-                    "route_id": route.route_id,
-                    "connection_id": route.connection_id,
-                    "model": route.wire_model,
-                    "effort": route.wire_effort,
+                    "transport": route.transport if route else "openrouter-decisions",
+                    "route_id": route.route_id if route else JEV_ACCESS_LANE,
+                    "connection_id": route.connection_id if route else "host-openrouter",
+                    "model": route.wire_model if route else JEV_MODEL,
+                    "effort": route.wire_effort if route else "not_applicable",
                     "status": status,
                 }
                 if reason:
@@ -1036,10 +1046,14 @@ class ModelAdvisorService:
                     request=frozen.advisor_input(),
                     model=frozen.advisor_context["model"]
                     if frozen.advisor_context
-                    else route.wire_model,
-                    access_lane=route.route_id,
+                    else route.wire_model
+                    if route
+                    else JEV_MODEL,
+                    access_lane=route.route_id if route else JEV_ACCESS_LANE,
                     reasoning_effort=(
-                        None if route.wire_effort == "not_applicable" else route.wire_effort
+                        route.wire_effort
+                        if route and route.wire_effort != "not_applicable"
+                        else None
                     ),
                     timeout_s=ADVISOR_FRAME_TIMEOUT_S,
                     **(
@@ -1061,8 +1075,11 @@ class ModelAdvisorService:
                 await record_attempt("failed", reason=reason)
                 self._finish_advisor_failure(owner, host_id, round_id, reason)
                 return
-            if frozen.attachments and result.get("attachment_digest") != document_digest(
-                frozen.advisor_input()["attachments"]
+            if (
+                frozen.attachments
+                and not frozen.uses_jev_router
+                and result.get("attachment_digest")
+                != document_digest(frozen.advisor_input()["attachments"])
             ):
                 reason = "Update the connected host to support Advisor attachments"
                 await record_attempt("failed", reason=reason)

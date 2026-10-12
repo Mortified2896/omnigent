@@ -3912,10 +3912,20 @@ class HostProcess:
         raw output is returned unparsed for server-side validation.
         """
         from omnigent.host.advisor_call import AdvisorCallError, generate_advisor_selection
+        from omnigent.host.jev_router import JEV_ACCESS_LANE, JEV_MODEL, generate_jev_selection
         from omnigent.model_advisor_workflow import document_digest
 
         try:
-            if frame.context_session_id is not None or frame.context_bridge_id is not None:
+            if frame.access_lane == JEV_ACCESS_LANE:
+                if (
+                    frame.model != JEV_MODEL
+                    or frame.reasoning_effort is not None
+                    or frame.context_session_id is not None
+                    or frame.context_bridge_id is not None
+                ):
+                    raise AdvisorCallError("Jev Router supports only current-prompt decisions")
+                result = await generate_jev_selection(request=frame.request)
+            elif frame.context_session_id is not None or frame.context_bridge_id is not None:
                 from omnigent.harnesses.codex_native.advisor import (
                     generate_context_advisor_selection,
                 )

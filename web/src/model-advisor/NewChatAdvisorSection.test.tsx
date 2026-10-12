@@ -338,6 +338,62 @@ it("offers Current model with independent effort and preserves the separately se
   });
 });
 
+it("offers Jev Router, preserves saved models, and sends Settings choices", async () => {
+  mountSection();
+  fireEvent.click(await screen.findByRole("combobox", { name: "Recommender model" }));
+  fireEvent.click(await screen.findByRole("option", { name: /Jev Router/ }));
+  expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("Jev Router");
+  expect(screen.queryByRole("combobox", { name: "Recommender reasoning effort" })).toBeNull();
+  expect(screen.getByTestId("model-advisor-jev-context")).toHaveTextContent("current prompt");
+  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  await waitFor(() => {
+    const saved = api.mock.calls.find(([, init]) => init?.method === "PUT");
+    expect(saved).toBeDefined();
+    const prefs = JSON.parse(saved![1].body).preferences;
+    expect(prefs.advisor_model_mode).toBe("jev");
+    expect(prefs.human_probability_percent).toBe(0);
+    expect(prefs.advisor_choice_id).toBe(LOGICAL_B.choice_id);
+    expect(prefs.providers.openai.selected_choice_ids).toEqual([LOGICAL_A.choice_id]);
+    expect(prefs.providers.glm.selected_choice_ids).toEqual([LOGICAL_B.choice_id]);
+  });
+  send();
+  await waitFor(() => {
+    const posted = api.mock.calls.find(
+      ([url, init]) => url.endsWith("/rounds") && init?.method === "POST",
+    );
+    expect(posted).toBeDefined();
+    expect(JSON.parse(posted![1].body).preferences.advisor_model_mode).toBe("jev");
+  });
+});
+
+it("restores Jev Router and sends without a generative advisor or effort", async () => {
+  prefsDto.logical_preferences = {
+    ...V2_PREFERENCES,
+    schema_version: 3,
+    providers: {
+      openai: { ...V2_PREFERENCES.providers.openai, disabled_model_ids: [] },
+      glm: { ...V2_PREFERENCES.providers.glm, disabled_model_ids: [] },
+    },
+    advisor_choice_id: null,
+    advisor_model_mode: "jev",
+  };
+  mountSection();
+  await waitFor(() =>
+    expect(screen.getByTestId("model-advisor-advisor-choice")).toHaveTextContent("Jev Router"),
+  );
+  expect(screen.queryByRole("combobox", { name: "Recommender reasoning effort" })).toBeNull();
+  send();
+  await waitFor(() => {
+    const posted = api.mock.calls.find(
+      ([url, init]) => url.endsWith("/rounds") && init?.method === "POST",
+    );
+    expect(posted).toBeDefined();
+    const prefs = JSON.parse(posted![1].body).preferences;
+    expect(prefs.advisor_model_mode).toBe("jev");
+    expect(prefs.advisor_choice_id).toBeNull();
+  });
+});
+
 it("does not confirm a running-chat recommendation until the current response finishes", async () => {
   const props = {
     hostId: "host_1",

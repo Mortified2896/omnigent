@@ -191,7 +191,7 @@ export interface RoundDto {
     }[];
     visible_pool_digest: string;
     human_choice_id: string;
-    advisor_executor_choice_id: string;
+    advisor_executor_choice_id: string | null;
     advisor_executor_model_id: string;
     recommendation_choice_id?: string;
     assigned_choice_id?: string;
