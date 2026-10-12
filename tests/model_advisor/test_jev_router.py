@@ -199,6 +199,7 @@ async def test_host_dispatches_jev_without_starting_codex_or_inheriting_session(
 
 @pytest.fixture(autouse=True)
 def isolate_jev_credentials(monkeypatch):
+    monkeypatch.setattr("omnigent.onboarding.secrets.load_secret", lambda name: None)
     monkeypatch.setattr("omnigent.host.jev_router._opencode_key", lambda: None)
 
 
@@ -226,3 +227,16 @@ async def test_opencode_uses_zen_endpoint_and_keeps_exact_settings_choices(monke
     result = await generate_jev_selection(request=jev_round().advisor_input())
     assert len(calls) == 1
     assert json.loads(result.raw_output)["candidate_id"] == OPENAI_LOW.choice_id
+
+
+def test_openrouter_reads_dedicated_stored_key(monkeypatch):
+    from omnigent.host.jev_router import _openrouter_key
+
+    monkeypatch.setattr(
+        "omnigent.util.env_credentials.getenv_with_omnigent_prefix", lambda name: None
+    )
+    monkeypatch.setattr(
+        "omnigent.onboarding.secrets.load_secret",
+        lambda name: "fixture-key" if name == "jev-openrouter" else None,
+    )
+    assert _openrouter_key() == "fixture-key"

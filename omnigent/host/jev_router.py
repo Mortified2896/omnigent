@@ -103,11 +103,15 @@ def build_jev_request(request: dict[str, object]) -> JevRequest:
 
 def _openrouter_key() -> str:
     from omnigent.onboarding.provider_config import load_config, load_providers
+    from omnigent.onboarding.secrets import load_secret
     from omnigent.util.env_credentials import getenv_with_omnigent_prefix
 
     value = getenv_with_omnigent_prefix("OPENROUTER_API_KEY")
     if value and value[1].strip():
         return value[1].strip()
+    stored = load_secret("jev-openrouter")
+    if stored and stored.strip():
+        return stored.strip()
     # Reuse only an explicitly configured OpenRouter provider. A gateway key
     # for OmniRoute, or a key from another app, is not an OpenRouter credential.
     for entry in load_providers(load_config()).values():
