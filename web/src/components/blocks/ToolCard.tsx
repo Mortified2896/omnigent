@@ -37,6 +37,8 @@ import {
   formatToolTitle,
 } from "@/lib/toolTitle";
 import { useFileViewer } from "@/shell/FileViewerContext";
+import { WorkspaceImage } from "@/components/WorkspaceImage";
+import { nativeToolImagePath } from "@/lib/workspaceImages";
 
 const OUTPUT_PREVIEW_LINE_LIMIT = 80;
 const OUTPUT_PREVIEW_CHAR_LIMIT = 12_000;
@@ -198,6 +200,7 @@ export function ToolCard({
       ? args.path
       : null;
   const onBodyClick = openFile && rawPath ? () => openFile(rawPath) : undefined;
+  const imagePath = state === "output-available" ? nativeToolImagePath(name, args, output) : null;
 
   return (
     <Collapsible defaultOpen={false} className="group not-prose w-full">
@@ -225,6 +228,11 @@ export function ToolCard({
             <EmptyOutputState state={state} />
           )}
       </CollapsibleContent>
+      {imagePath && (
+        <div className="mt-2">
+          <WorkspaceImage path={imagePath} alt={imagePath.split("/").pop() ?? "Tool image"} />
+        </div>
+      )}
     </Collapsible>
   );
 }

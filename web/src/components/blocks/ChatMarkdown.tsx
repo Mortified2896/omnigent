@@ -19,8 +19,11 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import {
   splitWorkspaceFileCitation,
   WORKSPACE_FILE_LINK_ATTR,
+  WORKSPACE_IMAGE_PATH_ATTR,
+  WORKSPACE_IMAGE_ALT_ATTR,
 } from "@/components/ai-elements/streamdown-security";
 import { ZoomableImage } from "@/components/ImageLightbox";
+import { WorkspaceImage } from "@/components/WorkspaceImage";
 import { useThrottledValue } from "@/hooks/useThrottledValue";
 import { withBasePath } from "@/lib/basePath";
 import { isNativeShell } from "@/lib/nativeBridge";
@@ -392,11 +395,21 @@ function ZoomableMarkdownImage({
   return <ZoomableImage {...props} src={resolvedSrc} alt={alt ?? ""} />;
 }
 
+function WorkspaceImageSpan({ node: _node, ...props }: WithHastNode<React.ComponentProps<"span">>) {
+  const marked = props as Record<string, unknown>;
+  const path = marked[WORKSPACE_IMAGE_PATH_ATTR];
+  const alt = marked[WORKSPACE_IMAGE_ALT_ATTR];
+  if (typeof path === "string")
+    return <WorkspaceImage path={path} alt={typeof alt === "string" ? alt : "Image"} />;
+  return <span {...props} />;
+}
+
 // Stable module-level override map so MessageResponse's shallow prop compare
 // never sees a new `components` identity and re-parses needlessly.
 const FILE_PATH_AWARE_COMPONENTS = {
   inlineCode: WorkspacePathInlineCode,
   img: ZoomableMarkdownImage,
+  span: WorkspaceImageSpan,
   a: WorkspaceFileLink,
 };
 

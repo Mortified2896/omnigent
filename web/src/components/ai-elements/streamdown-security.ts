@@ -3,6 +3,7 @@ import { createMathPlugin } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { defaultRehypePlugins, type LinkSafetyConfig, type StreamdownProps } from "streamdown";
 import { lazyCodePlugin } from "./lazyCodePlugin";
+import { workspaceImagePath } from "@/lib/workspaceImages";
 
 type StreamdownRehypePlugins = NonNullable<StreamdownProps["rehypePlugins"]>;
 type StreamdownRehypePlugin = StreamdownRehypePlugins[number];
@@ -35,6 +36,8 @@ export const FILE_LINK_STREAMDOWN_REHYPE_PLUGINS = createStreamdownRehypePlugins
 
 // Attribute carrying the original, unhardened href of a workspace-file link.
 export const WORKSPACE_FILE_LINK_ATTR = "data-omnigent-file";
+export const WORKSPACE_IMAGE_PATH_ATTR = "data-omnigent-image";
+export const WORKSPACE_IMAGE_ALT_ATTR = "data-omnigent-image-alt";
 
 // An href that can only be a protocol URL, a protocol-relative URL, or an
 // in-page anchor, never a path to a file in the session workspace. The
@@ -91,12 +94,13 @@ export const CHAT_LINK_SAFETY: LinkSafetyConfig = { enabled: false };
 export function rewriteFileUriLinks() {
   return (tree: HastElement) => {
     visitElements(tree, (node) => {
-      if (node.tagName !== "a") return;
-      const href = node.properties?.href;
+      if (node.tagName !== "a" && node.tagName !== "img") return;
+      const attribute = node.tagName === "img" ? "src" : "href";
+      const href = node.properties?.[attribute];
       if (typeof href !== "string" || !/^file:/i.test(href)) return;
       const path = fileUriToLocalPath(href);
       if (!path) return;
-      node.properties = { ...node.properties, href: path };
+      node.properties = { ...node.properties, [attribute]: path };
     });
   };
 }
@@ -161,6 +165,23 @@ export function markWorkspaceFileLinks() {
   };
 }
 
+/** Keep local images inert until our renderer can perform a session-authorized read. */
+export function markWorkspaceImages() {
+  return (tree: HastElement) => {
+    visitElements(tree, (node) => {
+      if (node.tagName !== "img") return;
+      const path = workspaceImagePath(node.properties?.src);
+      if (!path) return;
+      const alt = typeof node.properties?.alt === "string" ? node.properties.alt : "Image";
+      // Run AFTER sanitize strips authored marker attributes. A span never
+      // initiates a browser URL fetch; remote images still reach harden.
+      node.tagName = "span";
+      node.properties = { [WORKSPACE_IMAGE_PATH_ATTR]: path, [WORKSPACE_IMAGE_ALT_ATTR]: alt };
+      node.children = [];
+    });
+  };
+}
+
 function visitElements(node: HastElement, visitor: (node: HastElement) => void): void {
   if (node.type === "element") visitor(node);
   for (const child of node.children ?? []) {
@@ -204,6 +225,7 @@ function createStreamdownRehypePlugins(markFileLinks: boolean): StreamdownRehype
     // stripped any dangerous href, leaving nothing to hand over for such a link.
     if (markFileLinks) {
       plugins.push(markWorkspaceFileLinks);
+      plugins.push(markWorkspaceImages);
     }
 
     if (!isStreamdownHardenPlugin(plugin)) {
