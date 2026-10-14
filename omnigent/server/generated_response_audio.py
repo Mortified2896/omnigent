@@ -9,6 +9,7 @@ import io
 import logging
 import os
 import re
+import time
 import wave
 from contextlib import suppress
 from dataclasses import dataclass
@@ -21,10 +22,19 @@ from omnigent_client._http import is_loopback_url
 
 from omnigent.db.db_models import current_workspace_id, workspace_scope
 from omnigent.errors import OmnigentError
+from omnigent.server.audio_generation_estimate import (
+    model_key,
+    progress_key,
+    read_receipt,
+    save_receipt,
+)
 from omnigent.server.elevenlabs_speech import (
     ELEVENLABS_VOICE_PREFIX,
     ElevenLabsSpeechError,
     generate_elevenlabs_speech,
+)
+from omnigent.server.elevenlabs_speech import (
+    _chunks as narration_chunks,
 )
 from omnigent.server.generated_response_audio_timings import (
     timings_artifact_key,
@@ -390,6 +400,37 @@ class GeneratedResponseAudioCoordinator:
                 )
                 if entry is None:
                     raise _PostprocessError("audio_record_missing")
+                model = (
+                    "eleven_v4"
+                    if entry.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX)
+                    else SCHEDULED_AUDIO_BACKEND
+                )
+                started_at = time.time()
+                progress = {
+                    "started_at": entry.updated_at,
+                    "model": model,
+                    "narration_characters": len(narration),
+                }
+
+                async def note_progress(characters: int, completed: int, total: int) -> None:
+                    progress.update(
+                        completed_characters=characters,
+                        completed_chunks=completed,
+                        total_chunks=total,
+                        completed_at=time.time(),
+                    )
+                    try:
+                        await asyncio.to_thread(
+                            save_receipt, self.artifact_store, progress_key(key), progress
+                        )
+                    except (OSError, ValueError, TypeError):
+                        _logger.warning(
+                            "Could not save audio progress for response=%s", work.response_id
+                        )
+
+                await note_progress(
+                    0, 0, len(narration_chunks(narration)) if model == "eleven_v4" else 1
+                )
                 assert self._client is not None
                 if entry.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX):
                     from omnigent.onboarding.secrets import load_secret
@@ -404,6 +445,7 @@ class GeneratedResponseAudioCoordinator:
                             api_key=api_key or "",
                             voice_id=entry.voice_profile.removeprefix(ELEVENLABS_VOICE_PREFIX),
                             narration=narration,
+                            on_progress=note_progress,
                         )
                     except ElevenLabsSpeechError as exc:
                         raise _PostprocessError(exc.code) from None
@@ -478,6 +520,18 @@ class GeneratedResponseAudioCoordinator:
                     duration_seconds=duration,
                     sample_rate=rate,
                 )
+                try:
+                    stats_key = model_key(work.workspace_id, model)
+                    stats = await asyncio.to_thread(read_receipt, self.artifact_store, stats_key)
+                    samples = stats.get("samples", [])[-19:]
+                    samples.append((time.time() - started_at) / len(narration))
+                    await asyncio.to_thread(
+                        save_receipt, self.artifact_store, stats_key, {"samples": samples}
+                    )
+                except (OSError, ValueError, TypeError):
+                    _logger.warning(
+                        "Could not save audio estimate sample for response=%s", work.response_id
+                    )
             except _PostprocessError as exc:
                 await asyncio.to_thread(
                     self.audio_store.mark_failed,

@@ -7,6 +7,7 @@ import logging
 import re
 import time
 
+from omnigent.server.audio_generation_estimate import progress_key
 from omnigent.server.generated_audio_playback import _encode_lock
 from omnigent.server.generated_response_audio_timings import timings_artifact_key
 from omnigent.stores.artifact_store import ArtifactStore
@@ -46,6 +47,7 @@ def expire_generated_audio(
                     digest = hashlib.sha256(source).hexdigest()
                     artifact_store.delete(f"generated-response-audio/playback/{digest}.mp3-v1")
                 artifact_store.delete(timings_artifact_key(key))
+                artifact_store.delete(progress_key(key))
                 artifact_store.delete(key)
             if audio_store.complete_expiry(row):
                 removed += 1

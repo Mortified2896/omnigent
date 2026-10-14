@@ -10,6 +10,7 @@ import json
 import math
 import re
 import wave
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -84,7 +85,12 @@ def _units(
 
 
 async def generate_elevenlabs_speech(
-    client: httpx.AsyncClient, *, api_key: str, voice_id: str, narration: str
+    client: httpx.AsyncClient,
+    *,
+    api_key: str,
+    voice_id: str,
+    narration: str,
+    on_progress: Callable[[int, int, int], Awaitable[None]] | None = None,
 ) -> tuple[bytes, bytes | None, float, int]:
     """Make one request per chunk, with no automatic retry or model fallback."""
     if not api_key:
@@ -98,7 +104,8 @@ async def generate_elevenlabs_speech(
     complete_timings = True
     narration_offset = 0
     sample_count = 0
-    for text in _chunks(narration):
+    chunks = _chunks(narration)
+    for index, text in enumerate(chunks):
         try:
             response = await client.post(
                 "https://api.elevenlabs.io/v1/text-to-dialogue/with-timestamps",
@@ -135,6 +142,8 @@ async def generate_elevenlabs_speech(
         pcm_parts.append(pcm)
         sample_count += len(pcm) // 2
         narration_offset += len(text)
+        if on_progress is not None:
+            await on_progress(narration_offset, index + 1, len(chunks))
     output = io.BytesIO()
     with wave.open(output, "wb") as wav:
         wav.setnchannels(1)

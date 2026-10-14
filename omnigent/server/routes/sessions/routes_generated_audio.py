@@ -12,9 +12,20 @@ from fastapi import APIRouter, Request
 from fastapi.responses import Response
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.server.audio_generation_estimate import (
+    estimate_generation,
+    model_key,
+    progress_key,
+    read_receipt,
+)
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, AuthProvider
+from omnigent.server.elevenlabs_speech import ELEVENLABS_VOICE_PREFIX
 from omnigent.server.generated_audio_playback import mobile_playback_copy
-from omnigent.server.generated_response_audio import _response_narration_for_id
+from omnigent.server.generated_response_audio import (
+    GeneratedResponseAudioCoordinator,
+    _AudioWork,
+    _response_narration_for_id,
+)
 from omnigent.server.generated_response_audio_timings import (
     timings_artifact_key,
     validate_timing_sidecar,
@@ -23,6 +34,7 @@ from omnigent.server.routes._auth_helpers import (
     get_user_id,
     require_access_and_level,
 )
+from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND
 from omnigent.stores import ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.generated_response_audio import (
@@ -99,6 +111,38 @@ def register_generated_audio_routes(
         await _authorize(request, session_id)
         store = _require_audio_store()
         entries = await asyncio.to_thread(store.list_for_conversation, session_id)
+        estimates: dict[str, object] = {}
+        assert artifact_store is not None
+        for row in entries:
+            if row.status not in {"pending", "processing"}:
+                continue
+            model = (
+                "eleven_v4"
+                if row.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX)
+                else SCHEDULED_AUDIO_BACKEND
+            )
+            key = GeneratedResponseAudioCoordinator._artifact_key(
+                _AudioWork(row.workspace_id, session_id, row.response_id)
+            )
+            progress = await asyncio.to_thread(read_receipt, artifact_store, progress_key(key))
+            if progress.get("started_at") != row.updated_at or row.status == "pending":
+                progress = {}
+            characters = progress.get("narration_characters")
+            if not isinstance(characters, int):
+                narration = await asyncio.to_thread(
+                    _response_narration_for_id, conversation_store, session_id, row.response_id
+                )
+                characters = len(narration or "")
+            stats = await asyncio.to_thread(
+                read_receipt, artifact_store, model_key(row.workspace_id, model)
+            )
+            estimates[row.response_id] = estimate_generation(
+                model=model,
+                characters=characters,
+                started_at=row.updated_at if row.status == "processing" else None,
+                progress=progress,
+                samples=stats.get("samples", []),
+            )
         return {
             "data": [
                 {
@@ -108,6 +152,11 @@ def register_generated_audio_routes(
                     "sample_rate": row.sample_rate,
                     "error_code": row.error_code,
                     "updated_at": row.updated_at,
+                    **(
+                        {"generation": estimates[row.response_id]}
+                        if row.response_id in estimates
+                        else {}
+                    ),
                 }
                 for row in entries
             ]
