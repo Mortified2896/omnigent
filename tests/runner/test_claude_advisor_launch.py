@@ -106,3 +106,70 @@ async def test_claude_launch_rechecks_frozen_subscription_binding(monkeypatch, c
             await _validate_claude_advisor_launch(launch, **kwargs)
     else:
         await _validate_claude_advisor_launch(launch, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "changed", [None, "account", "connection", "model", "resolver", "missing"]
+)
+async def test_codex_backed_claude_launch_rechecks_the_live_bridge(monkeypatch, changed):
+    from omnigent.model_advisor_provider_policy import QualifiedRoute, plan_transport
+
+    choice = LogicalChoice("openai", "fixture-checkpoint", "low", "claude-native")
+    route = QualifiedRoute(
+        choice=choice,
+        transport="direct",
+        route_id="claude-codex",
+        wire_model=choice.model_id,
+        wire_effort="low",
+        entitlement_kind="chatgpt_plan",
+        entitlement_key="chatgpt-plan:bridge:account",
+        equivalence_key="fixture-claude-contract",
+        catalog_revision="fixture",
+        ready=True,
+        connection_id="codex-claude-bridge:connection",
+    )
+    plan = plan_transport(choice, "direct_only", (route,))
+    labels = {
+        "omnigent.advisor.round_id": "fixture-round",
+        "omnigent.advisor.logical_choice_id": choice.choice_id,
+        "omnigent.advisor.connection_id": route.connection_id,
+        "omnigent.access_lane": route.route_id,
+        **encode_transport_binding_label(
+            "omnigent.advisor.dispatch_route", json.dumps(route.to_payload())
+        ),
+        **encode_transport_binding_label(
+            "omnigent.advisor.transport_plan", json.dumps(plan.to_payload())
+        ),
+    }
+    launch = _ClaudeSessionLaunchMetadata(
+        model_override=choice.model_id, reasoning_effort="low", labels=labels
+    )
+
+    async def identity(_config):
+        if changed == "missing":
+            return None
+        return {
+            "entitlement_key": "chatgpt-plan:bridge:other"
+            if changed == "account"
+            else route.entitlement_key,
+            "connection_id": "codex-claude-bridge:other"
+            if changed == "connection"
+            else route.connection_id,
+            "models": [{"model": "other" if changed == "model" else choice.model_id}],
+        }
+
+    monkeypatch.setattr(
+        "omnigent.harnesses.claude_native.codex_subscription.subscription_identity", identity
+    )
+    kwargs = {
+        "session_id": "fixture-session",
+        "provider_configured": True,
+        "resolution_failed": changed == "resolver",
+        "claude_config": object(),
+    }
+    if changed:
+        with pytest.raises(RuntimeError, match="binding changed"):
+            await _validate_claude_advisor_launch(launch, **kwargs)
+    else:
+        await _validate_claude_advisor_launch(launch, **kwargs)

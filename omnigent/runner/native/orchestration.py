@@ -1385,6 +1385,16 @@ def _validate_advisor_dispatch_route(
         ("glm", "omniroute"): {"omniroute-glm-coding-plan"},
         ("glm", "glm-direct"): {"zai-direct-coding-plan", "zai-direct"},
     }.get((provider, access_lane), set())
+    if (
+        provider == "openai"
+        and access_lane == "claude-codex"
+        and plan_model.choice.harness == "claude-native"
+        and route_connection.startswith("codex-claude-bridge:")
+        and actual_route.entitlement_key.startswith("chatgpt-plan:bridge:")
+    ):
+        # The Claude launch guard also rechecks this exact connection and
+        # account against the authenticated live bridge before opening a pane.
+        allowed_connections = {route_connection}
     if route_connection not in allowed_connections:
         raise RuntimeError(
             f"Advisor session {session_id!r} connection {route_connection!r} is not "
