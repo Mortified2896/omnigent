@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Comment } from "@/hooks/useComments";
 import type { Conversation } from "@/hooks/useConversations";
-import { collectCommentInboxItems, collectInboxItems, sumPendingApprovals } from "./inbox";
+import {
+  collectAutomationReports,
+  collectCommentInboxItems,
+  collectInboxItems,
+  sumPendingApprovals,
+} from "./inbox";
 
 function makeRow(overrides: Partial<Conversation> & { id: string }): Conversation {
   return {
@@ -260,5 +265,29 @@ describe("sumPendingApprovals", () => {
       makeRow({ id: "d", pending_elicitations_count: 3 }),
     ];
     expect(sumPendingApprovals(rows)).toBe(5);
+  });
+});
+
+describe("collectAutomationReports", () => {
+  it("lists unread completed reports, preserves failure visibility, and excludes active, read and ordinary chats", () => {
+    const report = (id: string, overrides: Partial<Conversation> = {}) =>
+      makeRow({
+        id,
+        status: "idle",
+        labels: { "omnigent.scheduled_task_id": "task" },
+        ...overrides,
+      });
+    const rows = [
+      report("ready"),
+      report("failed", { status: "failed", updated_at: 2000 }),
+      report("running", { status: "running" }),
+      report("archived", { archived: true }),
+      report("read"),
+      makeRow({ id: "ordinary", status: "idle" }),
+    ];
+    expect(collectAutomationReports(rows, (id) => id !== "read").map((row) => row.id)).toEqual([
+      "failed",
+      "ready",
+    ]);
   });
 });

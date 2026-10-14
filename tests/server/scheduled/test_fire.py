@@ -730,6 +730,7 @@ async def test_native_wrapper_task_stamps_terminal_first_labels() -> None:
     assert conv_store.label_writes["conv_1"] == {
         "omnigent.ui": "terminal",
         "omnigent.wrapper": PI_NATIVE_AGENT_NAME,
+        "omnigent.scheduled_task_id": "task_1",
     }
 
 
@@ -756,7 +757,10 @@ async def test_non_native_host_bound_task_stamps_repl_terminal_label() -> None:
     await on_fire(0, "task_1")
     await _drain()
 
-    assert conv_store.label_writes["conv_1"] == {"omnigent.ui": "terminal"}
+    assert conv_store.label_writes["conv_1"] == {
+        "omnigent.ui": "terminal",
+        "omnigent.scheduled_task_id": "task_1",
+    }
 
 
 @pytest.mark.asyncio
@@ -781,7 +785,7 @@ async def test_non_native_task_without_agent_cache_stamps_no_labels() -> None:
     await _drain()
 
     assert len(conv_store.created) == 1
-    assert conv_store.label_writes == {}
+    assert conv_store.label_writes == {"conv_1": {"omnigent.scheduled_task_id": "task_1"}}
 
 
 @pytest.mark.asyncio
@@ -813,6 +817,7 @@ async def test_native_wrapper_labels_resolve_without_agent_cache() -> None:
     assert conv_store.label_writes["conv_1"] == {
         "omnigent.ui": "terminal",
         "omnigent.wrapper": PI_NATIVE_AGENT_NAME,
+        "omnigent.scheduled_task_id": "task_1",
     }
 
 

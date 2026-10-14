@@ -6,6 +6,7 @@ import hashlib
 import subprocess
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 from omnigent.stores.artifact_store import ArtifactStore
@@ -14,7 +15,9 @@ from omnigent.stores.artifact_store import ArtifactStore
 _encode_lock = threading.Lock()
 
 
-def mobile_playback_copy(store: ArtifactStore, source: bytes) -> bytes:
+def mobile_playback_copy(
+    store: ArtifactStore, source: bytes, *, is_current: Callable[[], bool] | None = None
+) -> bytes:
     """Return a source-hash-keyed MP3, or raise so the caller can serve the WAV.
 
     A seekable output file lets ffmpeg write gapless duration/delay metadata.
@@ -24,6 +27,8 @@ def mobile_playback_copy(store: ArtifactStore, source: bytes) -> bytes:
     digest = hashlib.sha256(source).hexdigest()
     key = f"generated-response-audio/playback/{digest}.mp3-v1"
     with _encode_lock:
+        if is_current is not None and not is_current():
+            raise ValueError("Recording expired before playback encoding")
         try:
             cached = store.get(key)
             if cached:

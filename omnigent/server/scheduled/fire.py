@@ -898,7 +898,11 @@ async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int
         session_state["scheduled_task_audio_voice_profile"] = scheduled_audio_voice(
             task.audio_voice_profile
         )
-        session_state["scheduled_task_audio_backend"] = SCHEDULED_AUDIO_BACKEND
+        session_state["scheduled_task_audio_backend"] = (
+            "elevenlabs"
+            if task.audio_voice_profile.startswith("elevenlabs:")
+            else SCHEDULED_AUDIO_BACKEND
+        )
     if session_state != (conv.session_state or {}):
         conv.session_state = session_state
         await asyncio.to_thread(
@@ -912,6 +916,7 @@ async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int
     # the override reload above) so the labels land on the conversation returned
     # to the launch/dispatch caller, not a stale pre-label reload of it.
     labels = await _presentation_labels(deps, task)
+    labels["omnigent.scheduled_task_id"] = task.id
     agent = await asyncio.to_thread(deps.agent_store.get, task.agent_id)
     lane = _scheduled_codex_access_lane(getattr(agent, "name", None))
     if lane:

@@ -18,6 +18,11 @@ import { SidebarDataProvider } from "@/hooks/useSidebarData";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  seedReadState,
+  resetReadStateForTests,
+  markConversationRead,
+} from "@/hooks/useUnseenConversations";
 import { InboxPage } from "./InboxPage";
 import type { Conversation } from "@/hooks/useConversations";
 import * as conversationsHook from "@/hooks/useConversations";
@@ -129,6 +134,7 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  resetReadStateForTests();
   vi.mocked(conversationsHook.useConversations).mockReturnValue(conversationsStub([]));
   vi.mocked(commentInboxHook.useCommentInbox).mockReturnValue(commentInboxStub());
   vi.mocked(sessionsApi.getSession).mockResolvedValue({
@@ -417,4 +423,25 @@ describe("InboxPage comments and errors", () => {
     // The error path also suppresses the empty state.
     expect(screen.queryByText("Nothing waiting on you")).not.toBeInTheDocument();
   });
+});
+
+it("shows a completed Daily Report and removes it when marked read", async () => {
+  const report = conversation({
+    id: "daily-report",
+    title: "Daily Report",
+    pending_elicitations_count: 0,
+    status: "idle",
+    labels: { "omnigent.scheduled_task_id": "daily-task" },
+    viewer_last_seen: 0,
+  });
+  seedReadState([report]);
+  vi.mocked(conversationsHook.useConversations).mockReturnValue(conversationsStub([report]));
+  renderPage();
+  expect(screen.getByTestId("inbox-report")).toHaveTextContent("Daily Report");
+  expect(screen.getByRole("link", { name: "Open report" })).toHaveAttribute(
+    "href",
+    "/c/daily-report",
+  );
+  markConversationRead(report.id, report.updated_at);
+  await waitFor(() => expect(screen.queryByTestId("inbox-report")).not.toBeInTheDocument());
 });

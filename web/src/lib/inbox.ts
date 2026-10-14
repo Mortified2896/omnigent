@@ -8,6 +8,22 @@ import type { Conversation } from "@/hooks/useConversations";
 import type { ElicitationRequest } from "./events";
 import { parseEvent } from "./sse";
 
+/** Completed automation sessions share the ordinary per-viewer read state. */
+export function collectAutomationReports(
+  rows: Conversation[],
+  isUnseen: (id: string, updatedAt: number, status: string | undefined) => boolean,
+): Conversation[] {
+  return rows
+    .filter(
+      (row) =>
+        !row.archived &&
+        Boolean(row.labels["omnigent.scheduled_task_id"]) &&
+        (row.status === "idle" || row.status === "failed") &&
+        isUnseen(row.id, row.updated_at, row.status),
+    )
+    .sort((a, b) => b.updated_at - a.updated_at);
+}
+
 /** One pending approval prompt, paired with the session that owns it. */
 export interface InboxItem {
   /**

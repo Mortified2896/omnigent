@@ -105,19 +105,22 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path, monkeypat
         from omnigent.server.routes.sessions import routes_generated_audio as routes
 
         compressed = b"ID3example compressed audio"
-        monkeypatch.setattr(routes, "mobile_playback_copy", lambda store, source: compressed)
+        monkeypatch.setattr(
+            routes, "mobile_playback_copy", lambda store, source, **kwargs: compressed
+        )
         mobile_url = f"{url}/answer-1/content?format=mp3"
         assert client.get(mobile_url).status_code == 401
         assert client.get(mobile_url, headers={"x-test-user": "stranger"}).status_code == 404
         mobile = client.get(mobile_url, headers=headers)
         assert mobile.content == compressed
+        assert mobile.headers["cache-control"] == "private, no-store"
         assert mobile.headers["content-type"] == "audio/mpeg"
         partial = client.get(mobile_url, headers={**headers, "Range": "bytes=0-1"})
         assert partial.status_code == 206
         assert partial.content == compressed[:2]
         assert partial.headers["content-range"] == f"bytes 0-1/{len(compressed)}"
 
-        def unavailable(*args):
+        def unavailable(*args, **kwargs):
             raise FileNotFoundError("ffmpeg unavailable")
 
         monkeypatch.setattr(routes, "mobile_playback_copy", unavailable)

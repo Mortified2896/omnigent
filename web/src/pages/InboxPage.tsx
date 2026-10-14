@@ -48,7 +48,13 @@ import { PageScroll } from "@/components/PageScroll";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useSidebarData } from "@/hooks/useSidebarData";
-import { collectInboxItems, type InboxItem, type InboxSource } from "@/lib/inbox";
+import {
+  collectAutomationReports,
+  collectInboxItems,
+  type InboxItem,
+  type InboxSource,
+} from "@/lib/inbox";
+import { isConversationUnseen, useUnseenTick } from "@/hooks/useUnseenConversations";
 import { relativeTime } from "@/lib/relativeTime";
 import { Link } from "@/lib/routing";
 import { useOmnigentAnalytics } from "@/lib/analytics";
@@ -75,6 +81,8 @@ export function InboxPage() {
     inboxRows: allRows,
     comments: commentInbox,
   } = useSidebarData();
+  useUnseenTick();
+  const reports = collectAutomationReports(allRows, isConversationUnseen);
   const [responded, setResponded] = useState<RespondedMap>({});
   // Manual expand/collapse toggles keyed by elicitation id. Anything
   // not in the map falls back to the default: expanded only for the
@@ -182,9 +190,11 @@ export function InboxPage() {
     <PageScroll contentClassName="px-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inbox</h1>
-        {(items.length > 0 || commentInbox.items.length > 0) && (
+        {(items.length > 0 || commentInbox.items.length > 0 || reports.length > 0) && (
           <span className="text-ui text-muted-foreground">
             {[
+              reports.length > 0 &&
+                `${reports.length} ${reports.length === 1 ? "report" : "reports"}`,
               items.length > 0 && (items.length === 1 ? "1 approval" : `${items.length} approvals`),
               commentInbox.items.length > 0 &&
                 (commentInbox.items.length === 1
@@ -223,16 +233,20 @@ export function InboxPage() {
         </div>
       )}
 
-      {assembling && items.length === 0 && commentInbox.items.length === 0 && (
-        <div className="flex items-center gap-2 py-12 text-ui text-muted-foreground">
-          <Loader2Icon className="size-4 animate-spin" />
-          Loading inbox…
-        </div>
-      )}
+      {assembling &&
+        items.length === 0 &&
+        commentInbox.items.length === 0 &&
+        reports.length === 0 && (
+          <div className="flex items-center gap-2 py-12 text-ui text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin" />
+            Loading inbox…
+          </div>
+        )}
 
       {!assembling &&
         failedSessionCount === 0 &&
         items.length === 0 &&
+        reports.length === 0 &&
         commentInbox.items.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-16 text-center">
             <InboxIcon className="size-8 text-muted-foreground/50" />
@@ -240,12 +254,37 @@ export function InboxPage() {
               {hasNextPage ? "Nothing waiting in these sessions" : "Nothing waiting on you"}
             </p>
             <p className="text-sm text-muted-foreground">
-              When an agent needs your input or someone comments on a file, it will show up here.
+              Completed automation reports, requests for your input, and file comments will show up
+              here.
             </p>
           </div>
         )}
 
       <div className="flex flex-col gap-4">
+        {reports.map((report) => (
+          <div
+            key={report.id}
+            data-testid="inbox-report"
+            className="flex items-center gap-3 rounded-xl border border-border bg-card p-4"
+          >
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-ui font-medium">{conversationDisplayLabel(report)}</p>
+              <p className="text-sm text-muted-foreground">
+                {report.status === "failed"
+                  ? "Report generation failed — open for details"
+                  : "Your report is ready"}
+                {" · "}
+                {relativeTime(report.updated_at * 1000)}
+              </p>
+            </div>
+            <Button asChild variant="ghost" size="sm">
+              <Link to={`/c/${report.id}`} componentId="inbox.report.open_session">
+                Open report
+                <ArrowRightIcon className="ml-1 size-3.5" />
+              </Link>
+            </Button>
+          </div>
+        ))}
         {items.map((item, index) => {
           const elicitationId = item.elicitation.elicitationId;
           const verdict = responded[elicitationId];

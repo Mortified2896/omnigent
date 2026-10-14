@@ -1615,6 +1615,9 @@ def create_app(
             conversation_store=conversation_store,
             artifact_store=artifact_store,
             tts_url=os.environ.get("OMNIGENT_TTS_URL"),
+            retention_days=int(os.environ["OMNIGENT_GENERATED_AUDIO_RETENTION_DAYS"])
+            if os.environ.get("OMNIGENT_GENERATED_AUDIO_RETENTION_DAYS")
+            else None,
         )
 
     @asynccontextmanager

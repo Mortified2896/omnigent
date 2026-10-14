@@ -44,9 +44,9 @@ untouched. Actual iPhone confirmation is still required after O1 deployment.
 
 ## Scheduled Kokoro policy
 
-New scheduled sessions explicitly select the Kokoro backend. The legacy
+Scheduled sessions using local voice profiles select the Kokoro backend. The legacy
 `daily-brief` voice profile resolves to `kokoro-heart` both at session creation
-and during audio generation/retry. Generated scheduled audio always requests
+and during audio generation/retry. Generated scheduled audio with local voice profiles requests
 Kokoro and native timings, including for sessions that lack the backend field
 or still carry a historical Qwen value. There is no Qwen fallback on failure.
 Existing ready recordings remain playable.
@@ -72,9 +72,9 @@ to a server on another machine.
 This route explicitly uses the standard `eleven_v4` model. It does not select
 Turbo or Flash, set latency optimizations, retry a failed provider request, or
 fall back to another speech service. It requests 24 kHz PCM through ElevenLabs'
-[speech-with-timestamps endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps)
+[dialogue-with-timestamps endpoint](https://elevenlabs.io/docs/api-reference/text-to-dialogue/convert-with-timestamps)
 and stores a WAV plus validated word timings for the existing player. Narration
-over 9,000 characters is split at a sentence or word boundary; the exact text
+over 2,000 characters is split at a sentence or word boundary; the exact text
 and timing offsets are preserved across chunks. Provider failures are saved as
 short error codes without response bodies or credentials. The written report
 remains available when audio fails.
@@ -84,3 +84,23 @@ speech worker. Existing recordings remain unchanged. Generating speech sends
 the cleaned report narration to ElevenLabs and uses that account's credits.
 Verify the intended voice and a short real V4 generation before enabling the
 recurring task; mock tests alone do not establish account/model access.
+
+## Automatic audio retention
+
+Set `OMNIGENT_GENERATED_AUDIO_RETENTION_DAYS` to a positive integer in the
+**server** environment. The Mac Daily Report uses `7`. The server sweeps on
+startup and hourly while running; sleeping or stopped Macs clean up after
+resuming. The age is measured from generation completion, so playing a recording
+does not extend its lifetime. With the variable unset, automatic expiry is off.
+
+The sweep removes expired ready WAVs, their highlighting sidecars, and MP3
+playback copies using the WAV content hash. It preserves all report text,
+attachments, and pending/processing audio. A small `audio_expired` marker stays
+in the audio store so a later completion event cannot trigger paid resynthesis.
+The player explains that the recording was removed. Cleanup retries interrupted
+file deletion and blocks explicit regeneration until removal finishes.
+
+Newly completed automation sessions carry `omnigent.scheduled_task_id`.
+Unread completed reports and failed runs appear in Inbox and contribute to its
+badge; opening the report clears it through the ordinary conversation read
+state. This reuses existing session updates rather than polling automations.

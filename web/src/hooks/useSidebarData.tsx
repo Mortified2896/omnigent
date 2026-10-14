@@ -18,7 +18,8 @@ import {
 } from "@/lib/sidebarConfig";
 import { filterSessionScope, sessionVisibility } from "@/lib/sessionVisibility";
 import { useIdentityReady, useViewerId } from "./useViewerId";
-import { sumPendingApprovals } from "@/lib/inbox";
+import { collectAutomationReports, sumPendingApprovals } from "@/lib/inbox";
+import { isConversationUnseen, useUnseenTick } from "./useUnseenConversations";
 import { useCommentInbox } from "./useCommentInbox";
 import {
   usePinnedConversations,
@@ -93,7 +94,10 @@ function useSidebarSources(config: SidebarConfig, identityReady: boolean) {
     [loadedRows, config.inboxIncludesShared, viewerId],
   );
   const comments = useCommentInbox(inboxRows);
-  const inboxCount = sumPendingApprovals(inboxRows) + comments.items.length;
+  useUnseenTick();
+  const automationReports = collectAutomationReports(inboxRows, isConversationUnseen);
+  const inboxCount =
+    sumPendingApprovals(inboxRows) + comments.items.length + automationReports.length;
   const watchedIds = useMemo(() => loadedRows.map((row) => row.id), [loadedRows]);
   const mineCursor = mine.data?.pages.at(-1)?.last_id;
   const sharedCursor = shared.data?.pages.at(-1)?.last_id;

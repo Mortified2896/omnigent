@@ -139,8 +139,19 @@ def register_generated_audio_routes(
         media_type = "audio/wav"
         extension = "wav"
         if format == "mp3":
+
+            def still_ready() -> bool:
+                current = store.get(session_id, response_id)
+                return (
+                    current is not None
+                    and current.status == "ready"
+                    and current.artifact_key == entry.artifact_key
+                )
+
             try:
-                content = await asyncio.to_thread(mobile_playback_copy, artifact_store, content)
+                content = await asyncio.to_thread(
+                    mobile_playback_copy, artifact_store, content, is_current=still_ready
+                )
                 media_type = "audio/mpeg"
                 extension = "mp3"
             except (OSError, ValueError, subprocess.SubprocessError):
@@ -150,7 +161,7 @@ def register_generated_audio_routes(
                 )
         headers = {
             "Content-Disposition": f'inline; filename="response-audio.{extension}"',
-            "Cache-Control": "private, max-age=31536000, immutable",
+            "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "Accept-Ranges": "bytes",
         }
@@ -224,5 +235,5 @@ def register_generated_audio_routes(
         return Response(
             content=json.dumps(timings, ensure_ascii=False, separators=(",", ":")),
             media_type="application/json",
-            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+            headers={"Cache-Control": "private, no-store"},
         )

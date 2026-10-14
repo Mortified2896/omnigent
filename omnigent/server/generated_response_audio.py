@@ -214,11 +214,16 @@ class GeneratedResponseAudioCoordinator:
         conversation_store: Any,
         artifact_store: Any,
         tts_url: str | None,
+        retention_days: int | None = None,
     ) -> None:
         self.audio_store = audio_store
         self.conversation_store = conversation_store
         self.artifact_store = artifact_store
         self.tts_url = tts_url.rstrip("/") if tts_url else None
+        if retention_days is not None and retention_days <= 0:
+            raise ValueError("Audio retention must be a positive number of days")
+        self.retention_days = retention_days
+        self._retention_worker: asyncio.Task[None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[_AudioWork] | None = None
         self._worker: asyncio.Task[None] | None = None
@@ -241,14 +246,38 @@ class GeneratedResponseAudioCoordinator:
                 _AudioWork(row.workspace_id, row.conversation_id, row.response_id)
             )
         self._worker = asyncio.create_task(self._run(), name="generated-response-audio")
+        if self.retention_days is not None:
+            self._retention_worker = asyncio.create_task(
+                self._expire_audio(), name="generated-audio-retention"
+            )
 
     async def stop(self) -> None:
+        if self._retention_worker is not None:
+            self._retention_worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._retention_worker
         if self._worker is not None:
             self._worker.cancel()
             with suppress(asyncio.CancelledError):
                 await self._worker
         if self._client is not None:
             await self._client.aclose()
+
+    async def _expire_audio(self) -> None:
+        from omnigent.server.generated_audio_retention import expire_generated_audio
+
+        assert self.retention_days is not None
+        while True:
+            try:
+                await asyncio.to_thread(
+                    expire_generated_audio,
+                    self.audio_store,
+                    self.artifact_store,
+                    self.retention_days,
+                )
+            except Exception:
+                _logger.exception("Generated audio retention sweep failed")
+            await asyncio.sleep(3600)
 
     def enqueue_completed_scheduled_response(self, conversation_id: str) -> None:
         """Persist a pending row and queue work after a successful scheduled turn."""

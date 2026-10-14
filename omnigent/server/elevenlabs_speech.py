@@ -17,7 +17,7 @@ import httpx
 ELEVENLABS_MODEL = "eleven_v4"
 ELEVENLABS_VOICE_PREFIX = "elevenlabs:"
 _SAMPLE_RATE = 24_000
-_CHUNK_LIMIT = 9_000  # Below v4's 10,000-character request limit.
+_CHUNK_LIMIT = 2_000  # Dialogue endpoint's documented reliable request size.
 
 
 class ElevenLabsSpeechError(Exception):
@@ -43,7 +43,7 @@ def _chunks(text: str) -> list[str]:
 
 
 def _units(
-    alignment: Any, text: str, narration_offset: int, time_offset: float
+    alignment: Any, text: str, narration_offset: int, time_offset: float, duration: float
 ) -> list[dict[str, Any]] | None:
     if not isinstance(alignment, dict):
         return None
@@ -63,6 +63,10 @@ def _units(
         for value in [*starts, *ends]
     ):
         return None
+    # Provider alignment can extend slightly past the final PCM sample (80 ms
+    # observed on v4). Clip only a short tail; larger inconsistencies lose timings.
+    if any(end > duration + 0.2 for end in ends):
+        return None
     try:
         return [
             {
@@ -70,7 +74,7 @@ def _units(
                 "narration_start": narration_offset + match.start(),
                 "narration_end": narration_offset + match.end(),
                 "start_seconds": time_offset + float(starts[match.start()]),
-                "end_seconds": time_offset + float(ends[match.end() - 1]),
+                "end_seconds": time_offset + min(float(ends[match.end() - 1]), duration),
             }
             for match in re.finditer(r"\S+", text)
             if any(character.isalnum() for character in match.group())
@@ -97,10 +101,13 @@ async def generate_elevenlabs_speech(
     for text in _chunks(narration):
         try:
             response = await client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps",
+                "https://api.elevenlabs.io/v1/text-to-dialogue/with-timestamps",
                 headers={"xi-api-key": api_key},
                 params={"output_format": "pcm_24000"},
-                json={"text": text, "model_id": ELEVENLABS_MODEL},
+                json={
+                    "inputs": [{"text": text, "voice_id": voice_id}],
+                    "model_id": ELEVENLABS_MODEL,
+                },
                 follow_redirects=False,
             )
         except httpx.HTTPError:
@@ -115,7 +122,11 @@ async def generate_elevenlabs_speech(
         except (ValueError, TypeError, KeyError, binascii.Error):
             raise ElevenLabsSpeechError("elevenlabs_invalid_audio") from None
         chunk_units = _units(
-            data.get("alignment"), text, narration_offset, sample_count / _SAMPLE_RATE
+            data.get("alignment"),
+            text,
+            narration_offset,
+            sample_count / _SAMPLE_RATE,
+            len(pcm) / 2 / _SAMPLE_RATE,
         )
         if chunk_units is None:
             complete_timings = False

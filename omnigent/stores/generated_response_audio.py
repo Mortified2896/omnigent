@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import asc, select, update
+from sqlalchemy import and_, asc, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 
@@ -129,7 +129,77 @@ class SqlAlchemyGeneratedResponseAudioStore:
                 .where(SqlGeneratedResponseAudio.conversation_id == conversation_id)
                 .where(SqlGeneratedResponseAudio.response_id == response_id)
                 .where(SqlGeneratedResponseAudio.status == "failed")
+                .where(
+                    or_(
+                        SqlGeneratedResponseAudio.error_code.is_(None),
+                        SqlGeneratedResponseAudio.error_code != "audio_expiring",
+                    )
+                )
                 .values(status="pending", error_code=None, updated_at=now_epoch())
+            )
+            return _affected_rows(result) == 1
+
+    def list_expired_all_workspaces(self, cutoff: int) -> list[GeneratedResponseAudio]:
+        """Include interrupted cleanup so removal is retried after a crash."""
+        with self._session("list_expired_generated_audio") as session:
+            rows = (
+                session.execute(
+                    select(SqlGeneratedResponseAudio).where(
+                        or_(
+                            and_(
+                                SqlGeneratedResponseAudio.status == "ready",
+                                SqlGeneratedResponseAudio.updated_at <= cutoff,
+                            ),
+                            and_(
+                                SqlGeneratedResponseAudio.status == "failed",
+                                SqlGeneratedResponseAudio.error_code == "audio_expiring",
+                            ),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [_to_entity(row) for row in rows]
+
+    def claim_expired(self, row: GeneratedResponseAudio) -> bool:
+        """Stop serving expired audio before deleting it; never reclaim new work."""
+        with self._session("claim_expired_audio") as session:
+            result = session.execute(
+                update(SqlGeneratedResponseAudio)
+                .where(SqlGeneratedResponseAudio.workspace_id == row.workspace_id)
+                .where(SqlGeneratedResponseAudio.conversation_id == row.conversation_id)
+                .where(SqlGeneratedResponseAudio.response_id == row.response_id)
+                .where(SqlGeneratedResponseAudio.updated_at == row.updated_at)
+                .where(
+                    or_(
+                        SqlGeneratedResponseAudio.status == "ready",
+                        and_(
+                            SqlGeneratedResponseAudio.status == "failed",
+                            SqlGeneratedResponseAudio.error_code == "audio_expiring",
+                        ),
+                    )
+                )
+                .values(status="failed", error_code="audio_expiring")
+            )
+            return _affected_rows(result) == 1
+
+    def complete_expiry(self, row: GeneratedResponseAudio) -> bool:
+        """Keep a small marker to prevent automatic paid resynthesis."""
+        with self._session("complete_audio_expiry") as session:
+            result = session.execute(
+                update(SqlGeneratedResponseAudio)
+                .where(SqlGeneratedResponseAudio.workspace_id == row.workspace_id)
+                .where(SqlGeneratedResponseAudio.conversation_id == row.conversation_id)
+                .where(SqlGeneratedResponseAudio.response_id == row.response_id)
+                .where(SqlGeneratedResponseAudio.status == "failed")
+                .where(SqlGeneratedResponseAudio.error_code == "audio_expiring")
+                .values(
+                    error_code="audio_expired",
+                    artifact_key=None,
+                    duration_seconds=None,
+                    sample_rate=None,
+                )
             )
             return _affected_rows(result) == 1
 

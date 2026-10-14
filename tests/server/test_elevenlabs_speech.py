@@ -15,6 +15,7 @@ import pytest
 
 from omnigent.server.elevenlabs_speech import (
     ElevenLabsSpeechError,
+    _units,
     generate_elevenlabs_speech,
 )
 from omnigent.server.generated_response_audio import GeneratedResponseAudioCoordinator, _AudioWork
@@ -44,7 +45,9 @@ def test_quality_model_and_timings_remain_exact_across_chunks(monkeypatch: pytes
         assert request.url.params["output_format"] == "pcm_24000"
         assert request.headers["xi-api-key"] == "test-secret"
         assert request.url.host == "api.elevenlabs.io"
-        return httpx.Response(200, json=_response(body["text"]))
+        assert request.url.path == "/v1/text-to-dialogue/with-timestamps"
+        assert body["inputs"][0]["voice_id"] == "voice123"
+        return httpx.Response(200, json=_response(body["inputs"][0]["text"]))
 
     narration = "First news. Next news. Last news."
 
@@ -56,7 +59,10 @@ def test_quality_model_and_timings_remain_exact_across_chunks(monkeypatch: pytes
 
     audio, timings, duration, rate = asyncio.run(run())
     assert len(requests) > 1
-    assert "".join(json.loads(request.content)["text"] for request in requests) == narration
+    assert (
+        "".join(json.loads(request.content)["inputs"][0]["text"] for request in requests)
+        == narration
+    )
     assert rate == 24000
     with wave.open(io.BytesIO(audio)) as wav:
         assert wav.getnframes() / wav.getframerate() == duration
@@ -134,3 +140,15 @@ def test_keychain_audio_runs_without_local_tts(monkeypatch: pytest.MonkeyPatch):
     audio_store.mark_ready.assert_called_once()
     assert audio_store.mark_ready.call_args.kwargs["sample_rate"] == 24000
     assert artifact_store.put.call_count == 2  # WAV and its validated word timings.
+
+
+def test_v4_alignment_short_tail_is_bound_to_audio_and_large_mismatch_is_rejected():
+    alignment = {
+        "characters": list("Report."),
+        "character_start_times_seconds": [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        "character_end_times_seconds": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.78],
+    }
+    units = _units(alignment, "Report.", 0, 0, 0.7)
+    assert units is not None and units[-1]["end_seconds"] == 0.7
+    alignment["character_end_times_seconds"][-1] = 2.0
+    assert _units(alignment, "Report.", 0, 0, 0.7) is None

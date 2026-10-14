@@ -213,7 +213,9 @@ export function GeneratedResponseAudioPlayer({
   if (entry.status === "failed") {
     return (
       <span className="text-[11px] text-muted-foreground" role="status">
-        Audio unavailable
+        {entry.error_code === "audio_expired" || entry.error_code === "audio_expiring"
+          ? "Recording removed after the retention period. The written report is still available."
+          : "Audio unavailable"}
       </span>
     );
   }
