@@ -31,7 +31,7 @@ export function DirectFallbackNotice({ sessionId }: { sessionId: string | null }
   const date = Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp * 1000) : null;
   const validDate = date && Number.isFinite(date.getTime()) ? date : null;
   return (
-    <div className="shrink-0 px-3 py-2 sm:px-6">
+    <div className="shrink-0 px-3 pt-16 pb-2 sm:px-6 md:pt-14">
       <div
         role="alert"
         data-testid="direct-fallback-notice"
