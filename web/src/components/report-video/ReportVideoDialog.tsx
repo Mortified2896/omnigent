@@ -58,7 +58,7 @@ export default function ReportVideoDialog({
       }}
     >
       <DialogContent
-        className="flex max-h-[92dvh] flex-col overflow-y-auto sm:max-w-5xl"
+        className="flex max-h-[92dvh] min-w-0 flex-col overflow-x-hidden overflow-y-auto sm:max-w-5xl"
         onInteractOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
@@ -84,7 +84,7 @@ export default function ReportVideoDialog({
           <label className="flex flex-col gap-1 text-sm">
             Recording
             <select
-              className="rounded-md border bg-background p-2"
+              className="w-full min-w-0 rounded-md border bg-background p-2"
               value={selected}
               disabled={busy}
               onChange={(event) => setResponse(event.target.value)}
@@ -339,7 +339,7 @@ function Editor({
       </p>
     );
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <canvas
         ref={canvas}
         width={1280}
@@ -372,11 +372,11 @@ function Editor({
         The presenter uses stylized speaking animation.
       </p>
       {scene && (
-        <fieldset disabled={busy} className="flex flex-col gap-3 rounded-lg border p-3">
+        <fieldset disabled={busy} className="flex min-w-0 flex-col gap-3 rounded-lg border p-3">
           <label className="flex flex-col gap-1 text-sm">
             Story card
             <select
-              className="rounded-md border bg-background p-2"
+              className="w-full min-w-0 rounded-md border bg-background p-2"
               value={index}
               onChange={(event) => {
                 const i = Number(event.target.value);
@@ -419,6 +419,8 @@ function Editor({
             Card text
             <Textarea
               rows={3}
+              style={{ fieldSizing: "fixed" }}
+              className="min-w-0"
               maxLength={600}
               value={scene.summary}
               onChange={(event) => edit({ summary: event.target.value })}
