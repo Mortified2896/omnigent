@@ -24,6 +24,10 @@ export function renderer(project: Project, scenes: Scene[], images: Map<string, 
     const word = project.units[activeReadAlongUnitIndex(project.units, time)];
     const talking =
       speaking && (project.timing === "estimated" || Boolean(word && time <= word.end_seconds));
+    // Face the story card, keeping the pointing hand inside the video frame.
+    c.save();
+    c.translate(354, 0);
+    c.scale(-1, 1);
     presenter(
       c,
       time,
@@ -36,6 +40,7 @@ export function renderer(project: Project, scenes: Scene[], images: Map<string, 
       },
       talking,
     );
+    c.restore();
     c.font = "500 17px system-ui, sans-serif";
     c.fillStyle = "#66695e";
     c.fillText("Your daily briefing", 87, 625);
