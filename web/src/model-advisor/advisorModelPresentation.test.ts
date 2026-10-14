@@ -26,6 +26,16 @@ function logical(overrides: Partial<LogicalOption> & { choice_id: string }): Log
 }
 
 describe("advisorModelRows", () => {
+  it("keeps Codex and Claude Code separate when the checkpoint and effort match", () => {
+    const rows = advisorModelRows([
+      logical({ choice_id: "codex", harness: "codex-native" }),
+      logical({ choice_id: "claude", harness: "claude-native", access_lanes: ["claude-codex"] }),
+    ]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].key).not.toBe(rows[1].key);
+    expect(rows[1].routeSummary).toBe("Claude Code · Codex Subscription");
+    expect(rows[1].choices[0].choice_id).toBe("claude");
+  });
   it("collapses efforts into one row per provider/checkpoint and shows every lane as the route line", () => {
     const rows = advisorModelRows([
       logical({

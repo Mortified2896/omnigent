@@ -310,9 +310,7 @@ class LogicalFrozenRound:
         def snapshot(choice: LogicalChoice) -> dict[str, str]:
             return {
                 "choice_id": choice.choice_id,
-                "provider": choice.provider,
-                "model_id": choice.model_id,
-                "reasoning_effort": choice.reasoning_effort,
+                **choice.to_payload(),
             }
 
         qualified_by_id = {choice.choice_id: choice for choice in self.qualified_pool}
@@ -387,21 +385,8 @@ class LogicalFrozenRound:
             "round_id": self.round_id,
             "settings_revision": self.settings_revision,
             "task": self.task,
-            "pool": [
-                {
-                    "provider": choice.provider,
-                    "model_id": choice.model_id,
-                    "reasoning_effort": choice.reasoning_effort,
-                }
-                for choice in self.pool
-            ],
-            "advisor": {
-                "provider": self.advisor.provider,
-                "model_id": self.advisor.model_id,
-                "reasoning_effort": self.advisor.reasoning_effort,
-            }
-            if self.advisor is not None
-            else None,
+            "pool": [choice.to_payload() for choice in self.pool],
+            "advisor": self.advisor.to_payload() if self.advisor is not None else None,
             "human_choice_id": self.human_choice_id,
             "human_probability_percent": self.human_probability_percent,
             "transport_preferences": [list(item) for item in self.transport_preferences],
@@ -417,21 +402,9 @@ class LogicalFrozenRound:
             payload.update(
                 {
                     "catalog_revision": self.catalog_revision,
-                    "qualified_pool": [
-                        {
-                            "provider": choice.provider,
-                            "model_id": choice.model_id,
-                            "reasoning_effort": choice.reasoning_effort,
-                        }
-                        for choice in self.qualified_pool
-                    ],
+                    "qualified_pool": [choice.to_payload() for choice in self.qualified_pool],
                     "user_enabled_pool": [
-                        {
-                            "provider": choice.provider,
-                            "model_id": choice.model_id,
-                            "reasoning_effort": choice.reasoning_effort,
-                        }
-                        for choice in self.user_enabled_pool
+                        choice.to_payload() for choice in self.user_enabled_pool
                     ],
                     "excluded_choices": [
                         {"choice_id": choice_id, "reason": reason}

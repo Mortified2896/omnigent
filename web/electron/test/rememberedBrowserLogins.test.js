@@ -86,14 +86,16 @@ test("remembered cookies restore after restart with HttpOnly and host-only rules
   assert.equal(result[0].domain, "example.com");
   assert.equal(result[0].hostOnly, true);
   assert.equal(result[0].expirationDate, undefined);
-  for (const [server, conversation] of [
-    ["http://localhost:6767", "b"],
-    ["http://localhost:6769", "a"],
-  ]) {
-    const isolated = browserSession();
-    await restarted.prepare(server, conversation, isolated);
-    assert.equal((await isolated.cookies.get({})).length, 0);
-  }
+  await Promise.all(
+    [
+      ["http://localhost:6767", "b"],
+      ["http://localhost:6769", "a"],
+    ].map(async ([server, conversation]) => {
+      const isolated = browserSession();
+      await restarted.prepare(server, conversation, isolated);
+      assert.equal((await isolated.cookies.get({})).length, 0);
+    }),
+  );
   await restarted.forget("http://localhost:6767", "a");
   assert.equal(fs.readdirSync(directory).length, 0);
   await restarted.flush();

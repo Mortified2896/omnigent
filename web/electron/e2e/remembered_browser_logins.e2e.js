@@ -26,7 +26,9 @@ if (!process.versions.electron) {
       errors += data;
     });
     const timer = setTimeout(() => child.kill("SIGTERM"), 20000);
-    const code = await new Promise((resolve) => child.on("exit", resolve));
+    const code = await new Promise((resolve) => {
+      child.on("exit", resolve);
+    });
     clearTimeout(timer);
     assert.equal(code, 0, errors.slice(-1800));
     const result = output.split("\n").find((line) => line.startsWith("LOGIN_CHECK "));
@@ -68,7 +70,9 @@ if (!process.versions.electron) {
             : "Signed out",
         );
       });
-      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       const url = `http://127.0.0.1:${server.address().port}/`;
       const settingsFile = path.join(directory, "settings.json");
       const store = createRememberedBrowserLogins({
@@ -100,9 +104,9 @@ if (!process.versions.electron) {
       });
       async function open(viewId) {
         const { entry } = registry.getOrCreate(viewId);
-        const loaded = new Promise((resolve) =>
-          entry.view.webContents.once("did-finish-load", resolve),
-        );
+        const loaded = new Promise((resolve) => {
+          entry.view.webContents.once("did-finish-load", resolve);
+        });
         registry.openOrNavigate(viewId, url);
         await loaded;
         return entry.view.webContents;

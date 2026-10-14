@@ -816,6 +816,7 @@ class _ForwardDedupeState:
     context_window: int | None = None
     recorded_token_usage: dict[str, int] | None = None
     recorded_api_usage: dict[str, dict[str, int]] = field(default_factory=dict)
+    usage_provider: str = "anthropic"
     observed_model: str | None = None
     posted_model: str | None = None
     observed_title: str | None = None
@@ -1163,6 +1164,7 @@ async def forward_claude_transcript_to_session(
     skip_user_messages: bool = False,
     start_at_offset: int | None = None,
     event_dispatcher: RunnerEventDispatcher | None = None,
+    usage_provider: str = "anthropic",
 ) -> None:
     """
     Tail Claude's JSONL transcript and mirror semantic items into AP.
@@ -1220,7 +1222,7 @@ async def forward_claude_transcript_to_session(
     # Dedupe: Claude rewrites the same usage block every poll until
     # the next assistant entry; only POST on real change. Mutated in
     # place by ``_forward_available_items`` and carried across polls.
-    dedupe = _ForwardDedupeState()
+    dedupe = _ForwardDedupeState(usage_provider=usage_provider)
     # Size-keyed transcript cost cache for ``_forward_session_cost`` — keeps
     # the per-poll cost reconciliation from re-parsing unchanged transcripts.
     # Reset on /clear and /fork rotations alongside ``dedupe``.
@@ -1341,7 +1343,7 @@ async def forward_claude_transcript_to_session(
                         # A rotated session is a fresh dedupe context — reseed
                         # so the new session's first model observation doesn't
                         # post against the prior session's baseline.
-                        dedupe = _ForwardDedupeState()
+                        dedupe = _ForwardDedupeState(usage_provider=usage_provider)
                         # The rotated session resolves to a new transcript +
                         # subagents/ dir, so prior cost entries are dead; drop
                         # them so cost is recomputed fresh for the new session.
@@ -1382,7 +1384,7 @@ async def forward_claude_transcript_to_session(
                         # A rotated session is a fresh dedupe context — reseed
                         # so the new session's first model observation doesn't
                         # post against the prior session's baseline.
-                        dedupe = _ForwardDedupeState()
+                        dedupe = _ForwardDedupeState(usage_provider=usage_provider)
                         # The rotated session resolves to a new transcript +
                         # subagents/ dir, so prior cost entries are dead; drop
                         # them so cost is recomputed fresh for the new session.
@@ -2956,6 +2958,7 @@ async def _forward_session_cost(
             client,
             session_id=session_id,
             usage=payload,
+            usage_provider=dedupe.usage_provider,
         )
     except httpx.HTTPError as exc:
         dedupe.cost_retry_failures += 1
@@ -3022,6 +3025,7 @@ async def supervise_forwarder(
     skip_user_messages: bool = False,
     start_at_offset: int | None = None,
     event_dispatcher: RunnerEventDispatcher | None = None,
+    usage_provider: str = "anthropic",
 ) -> None:
     """
     Run :func:`forward_claude_transcript_to_session` under a restart supervisor.
@@ -3085,6 +3089,7 @@ async def supervise_forwarder(
                 skip_user_messages=skip_user_messages,
                 start_at_offset=start_at_offset,
                 event_dispatcher=event_dispatcher,
+                usage_provider=usage_provider,
             )
             # The forwarder loop is ``while True`` and is not expected
             # to return normally. Treat any normal return as a crash
@@ -4896,6 +4901,7 @@ async def _forward_available_items(
                 },
                 context_window=resolved_context_window,
                 token_usage=record_token_usage,
+                usage_provider=dedupe.usage_provider,
             )
             if usage_changed:
                 dedupe.usage = posted_usage
@@ -5504,6 +5510,7 @@ async def _post_external_session_usage(
     usage: Mapping[str, float | str] | None,
     context_window: int | None = None,
     token_usage: dict[str, int] | None = None,
+    usage_provider: str = "anthropic",
 ) -> None:
     """
     Post one ``external_session_usage`` event to the Sessions API.
@@ -5547,7 +5554,7 @@ async def _post_external_session_usage(
             attributes={
                 "omnigent.harness": "claude-native",
                 "gen_ai.operation.name": "chat",
-                "gen_ai.provider.name": "anthropic",
+                "gen_ai.provider.name": usage_provider,
                 **(
                     {"gen_ai.response.model": usage["model"]}
                     if usage and isinstance(usage.get("model"), str)
@@ -5603,7 +5610,7 @@ def _record_claude_api_usage(
     attributes = {
         "omnigent.harness": "claude-native",
         "gen_ai.operation.name": "chat",
-        "gen_ai.provider.name": "anthropic",
+        "gen_ai.provider.name": dedupe.usage_provider,
         "gen_ai.response.id": api_usage.message_id,
     }
     if api_usage.model:

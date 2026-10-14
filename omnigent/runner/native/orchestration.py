@@ -8450,6 +8450,7 @@ async def _validate_claude_advisor_launch(
     session_id: str,
     provider_configured: bool,
     resolution_failed: bool,
+    claude_config=None,
 ) -> None:
     """Keep an Advisor's subscription route bound through native launch."""
     if metadata.labels.get("omnigent.advisor.round_id") or metadata.labels.get(
@@ -8477,8 +8478,26 @@ async def _validate_claude_advisor_launch(
             access_lane=metadata.labels.get("omnigent.access_lane"),
             connection_id=metadata.labels.get(ADVISOR_CONNECTION_LABEL_KEY),
         )
-        if metadata.labels.get("omnigent.access_lane") != "claude-direct":
-            raise RuntimeError("Claude Code requires its qualified Claude Direct route")
+        if metadata.labels.get("omnigent.access_lane") not in {"claude-direct", "claude-codex"}:
+            raise RuntimeError("Claude Code requires its qualified subscription route")
+    if metadata.labels.get("omnigent.access_lane") == "claude-codex":
+        from omnigent.harnesses.claude_native.codex_subscription import subscription_identity
+        from omnigent.model_advisor_binding import decode_transport_binding_label
+        from omnigent.stores.conversation_store import ADVISOR_DISPATCH_ROUTE_LABEL_KEY
+
+        raw_route = decode_transport_binding_label(
+            metadata.labels, ADVISOR_DISPATCH_ROUTE_LABEL_KEY
+        )
+        route = json.loads(raw_route) if isinstance(raw_route, str) else {}
+        identity = await subscription_identity(claude_config)
+        if (
+            resolution_failed
+            or identity is None
+            or route.get("entitlement_key") != identity["entitlement_key"]
+            or route.get("connection_id") != identity["connection_id"]
+            or metadata.model_override not in {m["model"] for m in identity["models"]}
+        ):
+            raise RuntimeError("Claude Codex subscription binding changed before launch")
     if metadata.labels.get("omnigent.access_lane") == "claude-direct":
         from omnigent.harnesses.claude_native.main import managed_claude_gateway_signal
 
@@ -9018,6 +9037,7 @@ async def _auto_create_claude_terminal(
         session_id=session_id,
         provider_configured=claude_config is not None,
         resolution_failed=_launch_config_resolution_failed,
+        claude_config=claude_config,
     )
     # A transient resolver failure must not be cached as "no provider configured".
     # A routed session's turn-1 ``/model`` can only reach ids this launch env
@@ -9489,7 +9509,10 @@ async def _auto_create_claude_terminal(
     # ``False`` correctly forwards everything from the beginning. This
     # mirrors the CLI client's ``prepared.cold_resumed`` handling in
     # ``claude_native.py``.
+    from omnigent.harnesses.claude_native.codex_subscription import bridge_profile
     from omnigent.harnesses.claude_native.forwarder import supervise_forwarder
+
+    claude_usage_provider = "openai" if bridge_profile(claude_config) else "anthropic"
 
     async def _supervise_bridge() -> None:
         try:
@@ -9503,6 +9526,7 @@ async def _auto_create_claude_terminal(
                 start_at_offset=resume_prefix_bytes,
                 auth=_runner_auth,
                 event_dispatcher=event_dispatcher,
+                usage_provider=claude_usage_provider,
             )
         finally:
             await _shutdown_session_router_async(session_id, _subagent_router)

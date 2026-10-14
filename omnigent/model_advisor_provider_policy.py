@@ -54,12 +54,19 @@ class LogicalChoice:
     provider: Provider
     model_id: str
     reasoning_effort: str
+    execution_harness: Literal["claude-native"] | None = None
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
             raise ProviderPolicyError("Only OpenAI, GLM and Claude plan models are in scope")
         _text(self.model_id)
         _text(self.reasoning_effort)
+        if self.execution_harness is not None and (
+            self.execution_harness != "claude-native" or self.provider != "openai"
+        ):
+            raise ProviderPolicyError(
+                "Only qualified OpenAI choices may use a Claude harness override"
+            )
         if self.model_id.lower().startswith(("auto/", "custom/")):
             raise ProviderPolicyError("A concrete model is required")
         for value in (self.model_id, self.reasoning_effort):
@@ -68,12 +75,33 @@ class LogicalChoice:
 
     @property
     def harness(self) -> str:
-        return "claude-native" if self.provider == "anthropic" else "codex-native"
+        return self.execution_harness or (
+            "claude-native" if self.provider == "anthropic" else "codex-native"
+        )
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "provider": self.provider,
+            "model_id": self.model_id,
+            "reasoning_effort": self.reasoning_effort,
+            **({"execution_harness": self.execution_harness} if self.execution_harness else {}),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> LogicalChoice:
+        if not isinstance(payload, dict) or set(payload) not in (
+            {"provider", "model_id", "reasoning_effort"},
+            {"provider", "model_id", "reasoning_effort", "execution_harness"},
+        ):
+            raise ProviderPolicyError("Unexpected logical choice shape")
+        return cls(**payload)
 
     @property
     def choice_id(self) -> str:
         # No route, account, display label or preference in semantic identity.
         value = [self.provider, self.model_id, self.reasoning_effort]
+        if self.execution_harness:
+            value.append(self.execution_harness)
         wire = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         return "logical-" + hashlib.sha256(wire.encode()).hexdigest()
 
@@ -385,6 +413,11 @@ def advisor_input(task: str, choices: tuple[LogicalChoice, ...]) -> dict:
                 "provider": row.provider,
                 "model_id": row.model_id,
                 "reasoning_effort": row.reasoning_effort,
+                **(
+                    {"harness": row.harness}
+                    if any(choice.execution_harness for choice in choices)
+                    else {}
+                ),
             }
             for row in sorted(choices, key=lambda item: item.choice_id)
         ],
@@ -444,11 +477,7 @@ class QualifiedRoute:
 
     def to_payload(self) -> dict[str, object]:
         return {
-            "choice": {
-                "provider": self.choice.provider,
-                "model_id": self.choice.model_id,
-                "reasoning_effort": self.choice.reasoning_effort,
-            },
+            "choice": self.choice.to_payload(),
             "transport": self.transport,
             "route_id": self.route_id,
             "wire_model": self.wire_model,
@@ -480,15 +509,9 @@ class QualifiedRoute:
             {*base_keys, "connection_id"},
         ):
             raise ProviderPolicyError("Unexpected qualified route shape")
-        choice = payload["choice"]
-        if not isinstance(choice, dict) or set(choice) != {
-            "provider",
-            "model_id",
-            "reasoning_effort",
-        }:
-            raise ProviderPolicyError("Unexpected qualified route choice")
+        choice = LogicalChoice.from_payload(payload["choice"])
         return cls(
-            choice=LogicalChoice(**choice),
+            choice=choice,
             transport=payload["transport"],
             route_id=payload["route_id"],
             wire_model=payload["wire_model"],
@@ -526,11 +549,7 @@ class TransportPlan:
 
     def to_payload(self) -> dict[str, object]:
         return {
-            "choice": {
-                "provider": self.choice.provider,
-                "model_id": self.choice.model_id,
-                "reasoning_effort": self.choice.reasoning_effort,
-            },
+            "choice": self.choice.to_payload(),
             "preference": self.preference,
             "primary": self.primary.to_payload(),
             "fallback": self.fallback.to_payload() if self.fallback is not None else None,
@@ -549,17 +568,10 @@ class TransportPlan:
             "reason",
         }:
             raise ProviderPolicyError("Unexpected transport plan shape")
-        raw_choice = payload["choice"]
-        if not isinstance(raw_choice, dict) or set(raw_choice) != {
-            "provider",
-            "model_id",
-            "reasoning_effort",
-        }:
-            raise ProviderPolicyError("Unexpected transport plan choice")
+        choice = LogicalChoice.from_payload(payload["choice"])
         primary = QualifiedRoute.from_payload(payload["primary"])
         fallback_value = payload["fallback"]
         fallback = None if fallback_value is None else QualifiedRoute.from_payload(fallback_value)
-        choice = LogicalChoice(**raw_choice)
         if primary.choice != choice or (fallback is not None and fallback.choice != choice):
             raise ProviderPolicyError("Transport plan routes disagree with its logical choice")
         if pool and choice.choice_id not in {item.choice_id for item in pool}:

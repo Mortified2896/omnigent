@@ -72,6 +72,35 @@ def frozen_round() -> LogicalFrozenRound:
     )
 
 
+def test_frozen_round_keeps_the_claude_harness_override_through_serialization():
+    claude = LogicalChoice("openai", OPENAI_LOW.model_id, "low", "claude-native")
+    preferences = replace(
+        PREFERENCES,
+        openai=replace(
+            PREFERENCES.openai, selected_choice_ids=(claude.choice_id, OPENAI_LOW.choice_id)
+        ),
+    )
+    routes = {**ROUTES, claude.choice_id: (route("direct", claude),)}
+    frozen = freeze_logical_round(
+        owner_id="owner",
+        host_id="host",
+        round_id="round-harness",
+        settings_revision="settings",
+        catalog_revision="catalog",
+        task="Task",
+        preferences=preferences,
+        catalog=(*CATALOG, claude),
+        routes_by_choice=routes,
+        human_choice_id=claude.choice_id,
+    )
+    restored = LogicalFrozenRound.from_payload(json.loads(json.dumps(frozen.to_payload())))
+    assert restored == frozen
+    assert (
+        next(c for c in restored.pool if c.choice_id == claude.choice_id).harness
+        == "claude-native"
+    )
+
+
 def test_advisor_input_is_transport_neutral_and_human_independent() -> None:
     frozen = frozen_round()
     direct = replace(

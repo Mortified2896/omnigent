@@ -349,7 +349,10 @@ function ProviderCard({
           <p>No qualified models in this provider's current catalog.</p>
         ) : null}
         {models.map((model) => (
-          <fieldset key={model.model_id} className="advisor-model-row">
+          <fieldset
+            key={JSON.stringify([model.model_id, model.harness])}
+            className="advisor-model-row"
+          >
             <legend>
               <span>{model.display_name}</span>
               <label className="advisor-model-switch">

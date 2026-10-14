@@ -53,16 +53,37 @@ verify a real turn; a catalog entry alone does not prove account entitlement.
 
 ## Claude Code and Jev harness selection
 
-Install Claude Code using Omnigent's supported harness installer and sign in on
+For Anthropic models, install Claude Code using Omnigent's supported harness installer and sign in on
 this Mac with `claude auth login --claudeai`. Confirm `claude auth status` reports
 first-party OAuth before enabling Claude answers in Model advisor settings.
 The host qualifies subscription choices from the installed CLI's live model
 catalog and an account digest; API keys and managed gateways are not treated as
 Claude subscription entitlement.
 
+Claude Code can also use the Mac's existing Codex subscription through the local
+`omnigent.harnesses.claude_native.codex_bridge` service. It exposes an authenticated
+Anthropic Messages endpoint on loopback, while a separate signed-in Codex
+app-server owns account authentication. Claude executes its tools and returns
+their results to the same pending Codex turn. No Claude subscription is required
+for this route; the underlying model remains OpenAI.
+
+Configure a gateway provider with an Anthropic surface, a credential helper,
+and an explicit `inference.harnesses.claude-native` model allowlist. Bind
+`claude_codex_bridge.base_url`, `auth_command` and `models` to that exact launch
+configuration. The authenticated bridge identity probes `account/read` and
+`model/list`; only live ChatGPT-plan models with a supported Claude effort
+qualify. Jev sees a separate Claude Code choice for the same checkpoint, and
+launch checks the frozen subscription and bridge identity again.
+
+The local bridge handles text and function-tool coding turns. It buffers each
+API response through its next tool or completion boundary. Multimodal requests,
+server-side Anthropic tools and Anthropic-specific billing are outside this
+compatibility route. Keep it bound to loopback and its credential private.
+
 Select Jev Router as the advisor and enable the desired OpenAI and Claude answer
 choices. Each candidate is a concrete harness, model and reasoning effort:
-OpenAI and GLM choices use native Codex; Claude choices use native Claude Code.
+OpenAI models can use native Codex or the qualified Claude Code bridge;
+GLM choices use native Codex and Anthropic choices use native Claude Code.
 The decision balance still controls whether your choice or Jev's recommendation
 runs. Set it to 0% me / 100% advisor for automatic assignment. Existing defaults
 and choice IDs remain compatible.

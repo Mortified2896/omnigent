@@ -7,7 +7,9 @@ function once(source, before, after) {
   return source.replace(before, after);
 }
 
-function addRememberedBrowserLogins(main, registry) {
+function addRememberedBrowserLogins(mainSource, registrySource) {
+  let main = mainSource;
+  let registry = registrySource;
   main = once(main, 'const { createBrowserViewRegistry } = require("./browserViewRegistry");', `const { createBrowserViewRegistry } = require("./browserViewRegistry");
 const { safeStorage } = require("electron");
 const { createRememberedBrowserLogins, rememberedBrowserLoginOptions, recoveryUrl } = require("./rememberedBrowserLogins");

@@ -1337,6 +1337,11 @@ async def claude_model_catalog(
     :param claude_config: The resolved launch config, or ``None``.
     :returns: Catalog rows, or ``None`` when the probe failed.
     """
+    from omnigent.harnesses.claude_native.codex_subscription import qualified_models
+
+    bridge_rows = await qualified_models(claude_config)
+    if bridge_rows is not None and claude_config is not None:
+        return [{**row, "isDefault": row["model"] == claude_config.model} for row in bridge_rows]
     probe = await probe_claude_model_options(claude_config)
     if probe is None:
         return None

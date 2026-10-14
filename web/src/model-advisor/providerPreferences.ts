@@ -70,6 +70,7 @@ export function normalizeProviderPreferences(prefs: ProviderPreferencesDto): Pro
 export interface LogicalOption {
   choice_id: string;
   provider: ProviderGroup;
+  harness?: string;
   model_id: string;
   display_name: string;
   reasoning_effort: string;
@@ -85,6 +86,7 @@ export interface LogicalOption {
 
 export interface ModelGroup {
   model_id: string;
+  harness?: string;
   display_name: string;
   options: LogicalOption[];
 }
@@ -211,16 +213,22 @@ export function groupModels(
   const combinations = new Set<string>();
   for (const option of options) {
     if (option.provider !== provider) continue;
-    const combination = JSON.stringify([option.model_id, option.reasoning_effort]);
+    const modelKey = JSON.stringify([option.model_id, option.harness ?? ""]);
+    const combination = JSON.stringify([modelKey, option.reasoning_effort]);
     if (ids.has(option.choice_id) || combinations.has(combination)) {
       throw new Error("Duplicate logical model/effort in provider catalog");
     }
     ids.add(option.choice_id);
     combinations.add(combination);
-    let model = models.get(option.model_id);
+    let model = models.get(modelKey);
     if (!model) {
-      model = { model_id: option.model_id, display_name: option.display_name, options: [] };
-      models.set(option.model_id, model);
+      model = {
+        model_id: option.model_id,
+        harness: option.harness,
+        display_name: option.display_name,
+        options: [],
+      };
+      models.set(modelKey, model);
     }
     model.options.push(option);
   }

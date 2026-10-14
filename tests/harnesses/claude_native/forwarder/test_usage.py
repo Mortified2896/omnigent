@@ -18,6 +18,25 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import omnigent.harnesses.claude_native.forwarder as forwarder
 
 
+def test_codex_backed_claude_usage_keeps_provider_and_counts_each_message_once(otel_exporter):
+    from omnigent.harnesses.claude_native.bridge import ClaudeApiUsage
+
+    dedupe = forwarder._ForwardDedupeState(usage_provider="openai")
+    usage = ClaudeApiUsage(
+        message_id="fixture-message",
+        model="fixture-openai-model",
+        usage={"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 40},
+    )
+    forwarder._record_claude_api_usage("fixture-session", usage, dedupe)
+    forwarder._record_claude_api_usage("fixture-session", usage, dedupe)
+    spans = otel_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].attributes["gen_ai.provider.name"] == "openai"
+    assert spans[0].attributes["omnigent.harness"] == "claude-native"
+    assert spans[0].attributes["gen_ai.usage.input_tokens"] == 140
+    assert spans[0].attributes["gen_ai.usage.output_tokens"] == 20
+
+
 def test_usage_from_status_state_surfaces_cumulative_cost() -> None:
     """
     ``_usage_from_status_state`` surfaces ``total_cost_usd`` as

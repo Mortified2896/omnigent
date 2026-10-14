@@ -3728,6 +3728,13 @@ class HostProcess:
 
         try:
             config = await asyncio.to_thread(resolve_native_claude_config, spec=None)
+            from omnigent.harnesses.claude_native.codex_subscription import qualified_models
+
+            bridge_rows = await qualified_models(config)
+            if bridge_rows is not None and config is not None:
+                return ModelOptionsResult(
+                    models=bridge_rows, routable_models=list(config.routable_models)
+                )
             rows = await claude_launch_catalog(config)
         except Exception:  # noqa: BLE001 — no catalog, never a crash
             _logger.warning("Claude model catalog unavailable", exc_info=True)

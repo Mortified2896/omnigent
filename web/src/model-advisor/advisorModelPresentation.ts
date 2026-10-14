@@ -26,8 +26,14 @@ import {
 } from "@/model-advisor/providerPreferences";
 
 /** The stable selection key for one advisor model row (provider + checkpoint). */
-export function advisorModelKey(option: Pick<LogicalOption, "provider" | "model_id">): string {
-  return JSON.stringify([option.provider, option.model_id]);
+export function advisorModelKey(
+  option: Pick<LogicalOption, "provider" | "model_id" | "harness">,
+): string {
+  return JSON.stringify([
+    option.provider,
+    option.model_id,
+    ...(option.provider === "openai" && option.harness === "claude-native" ? [option.harness] : []),
+  ]);
 }
 
 /** One rendered advisor model row: a logical model with its route metadata. */

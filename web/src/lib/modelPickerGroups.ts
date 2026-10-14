@@ -13,6 +13,7 @@ import type { NativeModelOption } from "./types";
 const LANE_LABELS: Readonly<Record<string, string>> = {
   omniroute: "OmniRoute",
   "claude-direct": "Claude Code",
+  "claude-codex": "Claude Code · Codex Subscription",
   "codex-direct": "Codex Subscription — Direct",
   "glm-direct": "Z.AI Direct",
 };

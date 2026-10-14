@@ -77,6 +77,7 @@ export interface CatalogDto {
 export interface LogicalOptionDto {
   choice_id: string;
   provider: ProviderGroup;
+  harness?: string;
   model_id: string;
   display_name: string;
   reasoning_effort: string;
@@ -423,6 +424,7 @@ export function toLogicalOptions(catalog: CatalogDto): LogicalOption[] {
   return (catalog.logical_options ?? []).map((option) => ({
     choice_id: option.choice_id,
     provider: option.provider,
+    harness: option.harness,
     model_id: option.model_id,
     display_name: option.display_name,
     reasoning_effort: option.reasoning_effort,

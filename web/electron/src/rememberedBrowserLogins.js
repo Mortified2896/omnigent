@@ -128,11 +128,16 @@ function createRememberedBrowserLogins({
       const data = JSON.parse(safeStorage.decryptString(bytes));
       if (data.version !== 1 || !Array.isArray(data.cookies))
         throw new Error("Saved browser login is invalid.");
-      for (const cookie of data.cookies) {
-        if (!enabled(key)) break;
+      let stopped = false;
+      await data.cookies.reduce(async (previous, cookie) => {
+        await previous;
+        if (stopped || !enabled(key)) {
+          stopped = true;
+          return;
+        }
         const details = cookieDetails(cookie);
         if (details) await session.cookies.set(details);
-      }
+      }, Promise.resolve());
       record.active = true;
     })();
     return record.ready;

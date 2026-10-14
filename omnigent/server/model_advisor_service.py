@@ -166,6 +166,18 @@ def _lane_classification(
     model_id: str,
     row: dict[str, Any] | None = None,
 ) -> tuple[AccessClass, str, str] | None:
+    if lane == "claude-codex":
+        if (
+            row is not None
+            and row.get("advisorProvider") == "openai"
+            and row.get("advisorHarness") == "claude-native"
+            and row.get("advisorAccessClass") == "chatgpt_plan"
+            and row.get("advisorCanonicalModel") == model_id
+            and str(row.get("advisorConnectionId", "")).startswith("codex-claude-bridge:")
+            and str(row.get("advisorEntitlementKey", "")).startswith("chatgpt-plan:bridge:")
+        ):
+            return "chatgpt_plan", "openai-codex-claude-bridge", row["advisorConnectionId"]
+        return None
     if lane in _LANE_CLASSIFICATIONS:
         if lane == "claude-direct" and (
             row is None
@@ -320,7 +332,9 @@ def build_host_catalog(models: list[dict[str, Any]]) -> HostCatalog:
                 lane_id=lane if isinstance(lane, str) else "",
                 provider_id=provider_id,
                 connection_id=connection_id,
-                harness="claude-native" if access_class == "claude_plan" else "codex",
+                harness="claude-native"
+                if access_class == "claude_plan" or lane == "claude-codex"
+                else "codex",
                 model_id=model_id.strip(),
                 reasoning_effort=effort,
                 access_class=access_class,
@@ -421,7 +435,9 @@ def _logical_choice_for_row(
     transport: str
     if access_class == "chatgpt_plan":
         provider = "openai"
-        if lane == "omniroute":
+        if lane == "claude-codex":
+            canonical, transport = row["advisorCanonicalModel"], "direct"
+        elif lane == "omniroute":
             canonical = _OPENAI_OMNIROUTE_TO_CANONICAL[model_id]
             transport = "omniroute"
         else:
@@ -441,7 +457,9 @@ def _logical_choice_for_row(
             transport = "direct"
     if canonical.casefold() in {"auto", "default", "smart", "codex-auto-review"}:
         return None
-    choice = LogicalChoice(provider, canonical, effort)
+    choice = LogicalChoice(
+        provider, canonical, effort, "claude-native" if lane == "claude-codex" else None
+    )
     entitlement_key = (
         row.get("advisorEntitlementKey")
         if isinstance(row.get("advisorEntitlementKey"), str)
@@ -891,11 +909,15 @@ class ModelAdvisorService:
                 if frozen_preferences.advisor_model_mode == "current"
                 else source.model_override or source.reported_model
             )
+            source_harness = await self._harness_for_session(source)
             current = next(
                 (
                     option.choice
                     for option in catalog.logical_options
-                    if source_model in option.model_ids or source_model == option.choice.model_id
+                    if option.choice.harness == source_harness
+                    and (
+                        source_model in option.model_ids or source_model == option.choice.model_id
+                    )
                 ),
                 None,
             )
@@ -916,13 +938,24 @@ class ModelAdvisorService:
                     "model": source_model,
                 }
                 source_lane = source.labels.get("omnigent.access_lane") or "codex-direct"
-            source_harness = await self._harness_for_session(source)
+            compatible = {
+                choice.choice_id
+                for choice in catalog.logical_choices
+                if choice.harness == source_harness
+            }
             frozen_preferences = replace(
                 frozen_preferences,
                 openai=(
                     frozen_preferences.openai
                     if source_harness == "codex-native"
-                    else replace(frozen_preferences.openai, enabled=False)
+                    else replace(
+                        frozen_preferences.openai,
+                        selected_choice_ids=tuple(
+                            id
+                            for id in frozen_preferences.openai.selected_choice_ids
+                            if id in compatible
+                        ),
+                    )
                 ),
                 glm=(
                     frozen_preferences.glm
@@ -943,7 +976,9 @@ class ModelAdvisorService:
                 allowed = {
                     option.choice_id
                     for option in catalog.logical_choices
-                    if option.provider == current.provider and option.model_id == current.model_id
+                    if option.harness == source_harness
+                    and option.provider == current.provider
+                    and option.model_id == current.model_id
                 }
                 frozen_preferences = replace(
                     frozen_preferences,
