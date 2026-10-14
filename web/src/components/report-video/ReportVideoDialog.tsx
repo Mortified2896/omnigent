@@ -125,7 +125,11 @@ function Editor({
   const audioQuery = useQuery({
     queryKey: ["generated-response-audio-content", sessionId, responseId, "mp3"],
     queryFn: async () =>
-      (await videoRequest(`${audioPath(sessionId, responseId)}/content?format=mp3`)).blob(),
+      (
+        await videoRequest(`${audioPath(sessionId, responseId)}/content?format=mp3`, {
+          priority: "high",
+        })
+      ).blob(),
     staleTime: Infinity,
     retry: false,
   });
@@ -142,6 +146,7 @@ function Editor({
   const [videoUrl, setVideoUrl] = useState("");
   const [watching, setWatching] = useState(false);
   const audio = useRef<HTMLAudioElement>(null);
+  const pendingSeek = useRef<number | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const imageElements = useRef(new Map<string, HTMLImageElement>());
   const controller = useRef<AbortController | null>(null);
@@ -213,7 +218,12 @@ function Editor({
     let frame = 0;
     const paint = () => {
       const context = canvas.current?.getContext("2d");
-      if (context) draw(context, audio.current?.currentTime ?? 0, !audio.current?.paused);
+      if (context) {
+        const time =
+          pendingSeek.current ??
+          (audio.current?.readyState ? audio.current.currentTime : (scenes[index]?.start ?? 0));
+        draw(context, time, Boolean(audio.current && !audio.current.paused));
+      }
     };
     const tick = () => {
       paint();
@@ -235,7 +245,7 @@ function Editor({
       element?.removeEventListener("seeked", paint);
       element?.removeEventListener("pause", paint);
     };
-  }, [draw, urls, audioUrl]);
+  }, [draw, urls, audioUrl, index, scenes]);
   const scene = scenes[index];
   function edit(change: Partial<Scene>) {
     setScenes((previous) =>
@@ -355,6 +365,16 @@ function Editor({
           src={audioUrl}
           aria-label="Video narration preview"
           className="w-full"
+          onLoadedMetadata={(event) => {
+            if (pendingSeek.current !== null) {
+              const position = pendingSeek.current;
+              pendingSeek.current = null;
+              event.currentTarget.currentTime = position;
+            }
+          }}
+          onSeeked={() => {
+            pendingSeek.current = null;
+          }}
         />
       )}
       {audioQuery.isError && (
@@ -383,7 +403,11 @@ function Editor({
                 setIndex(i);
                 setSearchIds([]);
                 setStatus("");
-                if (audio.current) audio.current.currentTime = scenes[i].start;
+                pendingSeek.current = scenes[i].start;
+                if (audio.current?.readyState) {
+                  pendingSeek.current = null;
+                  audio.current.currentTime = scenes[i].start;
+                }
               }}
             >
               {scenes.map((item, i) => (
