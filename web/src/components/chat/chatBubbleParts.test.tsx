@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ConversationScopeContext } from "@/components/chat/conversationScope";
 import { FeedbackFormContext } from "@/components/FeedbackContext";
+import { ReportActionsContext } from "@/components/scheduled/ReportActions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bubble } from "@/lib/renderItems";
 import { useChatStore, type ChatState } from "@/store/chatStore";
@@ -22,6 +23,8 @@ const mainCompletionFeedback = {
   ready: true,
 };
 const childCompletionFeedback = { ...mainCompletionFeedback, sessionId: "completion-child" };
+const reportTestContext = { sessionId: "conv_retry", prepare: vi.fn(() => true) };
+const otherReportTestContext = { ...reportTestContext, sessionId: "other-conversation" };
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -102,6 +105,36 @@ describe("Mermaid diagram width", () => {
       ]),
     ).toBe(false);
   });
+});
+
+it("renders completed report choices only in their owning scheduled conversation", async () => {
+  reportTestContext.prepare.mockClear();
+  const text =
+    'A relevant update.\n\n```omnigent-report-actions\n{"schema_version":1,"actions":[{"title":"Review OmniRoute","target":"Mac","why":"A reliability fix."}]}\n```';
+  const bubble: Extract<Bubble, { kind: "assistant" }> = {
+    kind: "assistant",
+    responseId: "report_response",
+    stableId: "report_response",
+    lifecycle: "completed",
+    error: null,
+    items: [{ kind: "text", itemId: "report_text", text, final: true }],
+  };
+  useChatStore.setState({ sessionStatus: "idle" });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const draw = (context: typeof reportTestContext) => {
+    return (
+      <QueryClientProvider client={client}>
+        <ReportActionsContext.Provider value={context}>
+          <BubbleView bubble={bubble} />
+        </ReportActionsContext.Provider>
+      </QueryClientProvider>
+    );
+  };
+  const view = render(draw(reportTestContext));
+  expect(screen.getByRole("group", { name: "Review OmniRoute" })).toBeInTheDocument();
+  expect(reportTestContext.prepare).not.toHaveBeenCalled();
+  view.rerender(draw(otherReportTestContext));
+  expect(screen.queryByRole("group", { name: "Review OmniRoute" })).not.toBeInTheDocument();
 });
 
 describe("assistant completion controls", () => {

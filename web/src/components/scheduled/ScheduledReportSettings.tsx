@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClockIcon, Loader2Icon, Settings2Icon } from "lucide-react";
+import { ClockIcon, ListChecksIcon, Loader2Icon, Settings2Icon } from "lucide-react";
 import { Link } from "@/lib/routing";
 import { getScheduledTask, updateScheduledTask } from "@/lib/scheduledTasksApi";
 import { SCHEDULED_TASKS_KEY } from "@/hooks/useScheduledTasks";
@@ -17,7 +17,13 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** Owner-only controls for the automation that produced this conversation. */
-export function ScheduledReportSettings({ taskId }: { taskId: string }) {
+export function ScheduledReportSettings({
+  taskId,
+  onChooseActions,
+}: {
+  taskId: string;
+  onChooseActions?: () => boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState("change");
   const [change, setChange] = useState("");
@@ -25,6 +31,7 @@ export function ScheduledReportSettings({ taskId }: { taskId: string }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
   const basePrompt = useRef<string | null>(null);
   const client = useQueryClient();
   const query = useQuery({
@@ -92,15 +99,39 @@ export function ScheduledReportSettings({ taskId }: { taskId: string }) {
           <ClockIcon className="size-3.5" />
           Ask here to change future reports.
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-xs"
-          onClick={() => changeOpen(true)}
-        >
-          <Settings2Icon className="size-3.5" />
-          Report settings
-        </Button>
+        <div className="flex items-center gap-1">
+          {onChooseActions && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-xs"
+              onClick={() =>
+                setActionStatus(
+                  onChooseActions()
+                    ? "Request added to your draft. Press Send to get action choices."
+                    : "Could not prepare the request. Open a writable chat and try again.",
+                )
+              }
+            >
+              <ListChecksIcon className="size-3.5" />
+              Choose actions
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-xs"
+            onClick={() => changeOpen(true)}
+          >
+            <Settings2Icon className="size-3.5" />
+            Report settings
+          </Button>
+        </div>
+        {actionStatus && (
+          <p role="status" className="w-full text-xs">
+            {actionStatus}
+          </p>
+        )}
       </div>
       <Dialog open={open} onOpenChange={changeOpen}>
         <DialogContent

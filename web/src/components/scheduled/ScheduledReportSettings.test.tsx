@@ -36,12 +36,12 @@ const task: ScheduledTask = {
   nextRunAt: "2026-10-15T07:00:00+08:00",
 };
 
-function mount() {
+function mount(onChooseActions?: () => boolean) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(
     <MemoryRouter>
       <QueryClientProvider client={client}>
-        <ScheduledReportSettings taskId={task.id} />
+        <ScheduledReportSettings taskId={task.id} onChooseActions={onChooseActions} />
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -66,6 +66,15 @@ afterEach(() => {
 });
 
 describe("ScheduledReportSettings", () => {
+  it("prepares action choices for an existing report without editing or opening its automation", () => {
+    const prepare = vi.fn(() => true);
+    mount(prepare);
+    fireEvent.click(screen.getByRole("button", { name: "Choose actions" }));
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent("Press Send to get action choices");
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.update).not.toHaveBeenCalled();
+  });
   it("loads only when opened and adds an instruction to the latest prompt without changing settings", async () => {
     mount();
     expect(api.get).not.toHaveBeenCalled();

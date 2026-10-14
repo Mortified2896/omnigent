@@ -228,6 +228,31 @@ const feedbackComposerContext = {
   reviews: { current: new Map() },
   renderTranscript: () => null,
 };
+
+describe("report action drafts", () => {
+  it("appends selected actions while preserving existing text and quoted replies, then waits for Send", () => {
+    useChatStore.setState({ conversationId: "conv_report_actions", blocks: [] });
+    const ref = createRef<ComponentRef<typeof Composer>>();
+    const props = composerProps();
+    render(<Composer {...props} ref={ref} />);
+    fireEvent.change(textarea(), { target: { value: "My existing draft" } });
+    act(() => ref.current?.appendReplyQuote("Quoted report finding"));
+    fireEvent.change(textarea(), { target: { value: "My added note" } });
+    act(() => expect(ref.current?.prepareReportActions("Review the OmniRoute update.")).toBe(true));
+    expect(textarea()).toHaveValue("My added note\n\nReview the OmniRoute update.");
+    expect(screen.getByLabelText("Reply text before quote 1")).toHaveValue("My existing draft");
+    expect(screen.getByTestId("composer-reply-quote")).toHaveTextContent("Quoted report finding");
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+  it("rejects preparation in a read-only composer", () => {
+    useChatStore.setState({ conversationId: "conv_report_readonly", blocks: [] });
+    const ref = createRef<ComponentRef<typeof Composer>>();
+    const props = composerProps({ readOnlyReason: "Read only" });
+    render(<Composer {...props} ref={ref} />);
+    act(() => expect(ref.current?.prepareReportActions("Try the update.")).toBe(false));
+    expect(props.onSend).not.toHaveBeenCalled();
+  });
+});
 const prepared = {
   id: "prepared-1",
   responseId: "original-response",

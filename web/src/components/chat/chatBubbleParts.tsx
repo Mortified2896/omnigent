@@ -5,6 +5,8 @@ import { FeedbackDiscussionContext, FeedbackFormContext } from "@/components/Fee
 import { ResponseRouteBadge } from "./ResponseRouteBadge";
 import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
 import { GeneratedResponseAudioPlayer } from "@/components/chat/GeneratedResponseAudioPlayer";
+import { ReportActions, ReportActionsContext } from "@/components/scheduled/ReportActions";
+import { extractReportActions } from "@/lib/reportActions";
 // Bubble rendering, scroll helpers, and the working-indicator cluster for the
 // chat transcript. Extracted from ChatPage.tsx so <Transcript> can import them
 // without the ChatPage ↔ Transcript module cycle. ChatPage re-exports these for
@@ -978,12 +980,22 @@ function AssistantBubble({
   // main transcript) reads the root store exactly as before; `useConversationEntryState(null)`
   // is inert (no subscription, stable empty snapshot).
   const feedbackDiscussion = useContext(FeedbackDiscussionContext);
+  const reportContext = useContext(ReportActionsContext);
   const conversationIdForFeedback = useScopedConversationId();
   const feedbackTarget =
     feedbackDiscussion?.sessionId === conversationIdForFeedback
       ? feedbackDiscussion.replyTargets?.get(sourceBubble.responseId)
       : undefined;
   const feedbackText = feedbackTarget ? collectBubbleMarkdown(sourceBubble.items) : "";
+  const reportItems =
+    !feedbackTarget &&
+    reportContext?.sessionId === conversationIdForFeedback &&
+    sourceBubble.lifecycle === "completed"
+      ? sourceBubble.items.map((item) =>
+          item.kind === "text" ? extractReportActions(item.text) : null,
+        )
+      : [];
+  const reportActions = reportItems.flatMap((item) => item?.actions ?? []).slice(0, 3);
   const bubble = feedbackTarget
     ? {
         ...sourceBubble,
@@ -993,7 +1005,16 @@ function AssistantBubble({
             : item,
         ),
       }
-    : sourceBubble;
+    : reportActions.length
+      ? {
+          ...sourceBubble,
+          items: sourceBubble.items.map((item, index) =>
+            item.kind === "text"
+              ? { ...item, text: reportItems[index]?.markdown ?? item.text }
+              : item,
+          ),
+        }
+      : sourceBubble;
   const scopedConversationId = useContext(ConversationScopeContext);
   const scopedState = useConversationEntryState(scopedConversationId);
   const activeConversationId = useChatStore((s) => s.conversationId);
@@ -1145,6 +1166,9 @@ function AssistantBubble({
             defaultExpanded={bubble.defaultExpanded}
             onRetryError={recoveryDisabled ? undefined : handleRetryError}
           />
+          {reportActions.length > 0 && !responseInProgress && (
+            <ReportActions actions={reportActions} responseId={bubble.responseId} />
+          )}
           {!foldOnly &&
             !errorOnly &&
             bubble.lifecycle === "completed" &&

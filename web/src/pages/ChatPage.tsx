@@ -3,6 +3,8 @@ import {
   GeneratedAudioDockProvider,
 } from "@/components/chat/GeneratedAudioDock";
 import { ScheduledReportSettings } from "@/components/scheduled/ScheduledReportSettings";
+import { ReportActionsContext } from "@/components/scheduled/ReportActions";
+import { reportActionPlanningRequest } from "@/lib/reportActions";
 import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
 import { FeedbackDiscussionComposerContext } from "@/components/FeedbackDiscussionControls";
 import { isFeedbackReviewFocused } from "@/components/ai-elements/conversation";
@@ -1696,6 +1698,17 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
   // out of streaming-frame re-renders.
 
   const composerRef = useRef<ComposerHandle>(null);
+  const reportActionsContext = useMemo(
+    () =>
+      scheduledTaskId && conversationId
+        ? {
+            sessionId: conversationId,
+            prepare: (request: string) =>
+              composerRef.current?.prepareReportActions(request) ?? false,
+          }
+        : null,
+    [scheduledTaskId, conversationId],
+  );
   // Cold selector (harness rarely changes) — gates the selection popup's "Ask
   // in side chat" action to harnesses that support side chat.
   const selectionSessionHarness = useChatStore((s) => s.sessionHarness);
@@ -1918,20 +1931,22 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
           {/* The scrolling transcript column owns every streaming-hot store
           subscription and the bubble pipeline, so an SSE frame re-renders it
           alone — this surface's composer and chrome below bail out. */}
-          <Transcript
-            setConversationEl={setConversationEl}
-            containerEl={containerEl}
-            scroller={scroller}
-            setScroller={setScroller}
-            sendScrollNonce={sendScrollNonce}
-            hasMoreHistory={hasMoreHistory}
-            loadingMoreHistory={loadingMoreHistory}
-            isMobileViewport={isMobileViewport}
-            showsWorking={showsWorking}
-            agentsError={agentsError}
-            sandboxLaunching={sandboxLaunching}
-            spacerMeasureRef={spacerMeasureRef}
-          />
+          <ReportActionsContext.Provider value={reportActionsContext}>
+            <Transcript
+              setConversationEl={setConversationEl}
+              containerEl={containerEl}
+              scroller={scroller}
+              setScroller={setScroller}
+              sendScrollNonce={sendScrollNonce}
+              hasMoreHistory={hasMoreHistory}
+              loadingMoreHistory={loadingMoreHistory}
+              isMobileViewport={isMobileViewport}
+              showsWorking={showsWorking}
+              agentsError={agentsError}
+              sandboxLaunching={sandboxLaunching}
+              spacerMeasureRef={spacerMeasureRef}
+            />
+          </ReportActionsContext.Provider>
           {/* Floating reply button — scoped to the conversation container. */}
           <SelectionPopup
             containerRef={conversationRef}
@@ -1944,7 +1959,13 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
           />
 
           {scheduledTaskId && (
-            <ScheduledReportSettings key={scheduledTaskId} taskId={scheduledTaskId} />
+            <ScheduledReportSettings
+              key={scheduledTaskId}
+              taskId={scheduledTaskId}
+              onChooseActions={() =>
+                reportActionsContext?.prepare(reportActionPlanningRequest(scheduledTaskId)) ?? false
+              }
+            />
           )}
           <GeneratedAudioDock />
           <Composer
@@ -2051,6 +2072,7 @@ function ConversationLoadError({
 }
 
 interface ComposerHandle {
+  prepareReportActions: (text: string) => boolean;
   appendReplyQuote: (text: string) => void;
   startSideChat: (selectedText: string) => void;
 }
@@ -3521,6 +3543,28 @@ function ComposerImpl(
 
   const replyQuoteInsertedRef = useRef(false);
   useImperativeHandle(ref, () => ({
+    prepareReportActions(text) {
+      if (
+        disabled ||
+        isReadOnly ||
+        composerLockedByBtw ||
+        !text.trim() ||
+        settledConversationId !== conversationId
+      )
+        return false;
+      // Preserve existing text, reply quotes and attachments. The normal Send
+      // path owns reconnects, permissions and execution; choosing is not sending.
+      editText(null, (current) => `${current.trimEnd()}${current.trim() ? "\n\n" : ""}${text}`);
+      focusText(null);
+      textareaRef.current = tailTextareaRef.current;
+      dirtyRef.current = true;
+      replyQuoteInsertedRef.current = true;
+      setCommandError(null);
+      dismissMention();
+      resetCursor();
+      recallingRef.current = false;
+      return true;
+    },
     appendReplyQuote(text) {
       if (disabled || isReadOnly || unreachable || composerLockedByBtw || !text.trim()) return;
       appendQuote(text);

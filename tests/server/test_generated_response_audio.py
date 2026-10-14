@@ -48,6 +48,15 @@ print('ignore this')
     assert "print" not in spoken
 
 
+def test_report_decision_metadata_is_not_read_aloud() -> None:
+    source = (
+        "An update is worth reviewing. Choose below when ready.\n\n"
+        '```omnigent-report-actions\n{"schema_version":1,"actions":'
+        '[{"title":"Hidden metadata","target":"Mac","why":"JSON only"}]}\n```'
+    )
+    assert clean_narration(source) == ("An update is worth reviewing. Choose below when ready.")
+
+
 @pytest.mark.parametrize("legacy_backend", [None, "qwen", "kokoro"])
 def test_audio_worker_stores_wav_for_exact_completed_response(legacy_backend: str | None) -> None:
     class AudioStore:
