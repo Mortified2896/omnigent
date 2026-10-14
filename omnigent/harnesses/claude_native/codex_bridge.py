@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import re
 import subprocess
 import time
 import uuid
@@ -437,6 +438,13 @@ class Bridge:
             raise
         except Exception as error:  # noqa: BLE001 — fixed response without upstream payloads
             self.last_error = {"phase": phase, "type": type(error).__name__}
+            model = body.get("model", "")
+            if (
+                phase == "model"
+                and isinstance(model, str)
+                and re.fullmatch(r"[\w.\-\[\]:/]{1,128}", model)
+            ):
+                self.last_error["model"] = model
             if turn:
                 await self.discard(turn)
             # No upstream error/credential/prompt content enters local logs.
