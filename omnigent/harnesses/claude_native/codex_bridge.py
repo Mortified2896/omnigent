@@ -438,6 +438,15 @@ class Bridge:
             raise
         except Exception as error:  # noqa: BLE001 — fixed response without upstream payloads
             self.last_error = {"phase": phase, "type": type(error).__name__}
+            if str(error) in {
+                "Codex rejected initialize",
+                "Codex rejected thread/start",
+                "Codex rejected turn/start",
+            }:
+                self.last_error["operation"] = str(error).removeprefix("Codex rejected ")
+            effort = (body.get("output_config") or {}).get("effort")
+            if isinstance(effort, str) and re.fullmatch(r"[a-z]{1,16}", effort):
+                self.last_error["effort"] = effort
             model = body.get("model", "")
             if (
                 phase == "model"
