@@ -244,9 +244,16 @@ class Bridge:
 
     async def start(self, body: dict) -> Turn:
         messages = body.get("messages", [])
-        blocks = messages[-1].get("content", []) if messages else []
-        blocks = blocks if isinstance(blocks, list) else []
-        results = [b for b in blocks if b.get("type") == "tool_result"]
+        # Claude may append a separate user message containing reminders
+        # after the tool result. Match the outstanding call in the replay.
+        matches = [
+            (index, block)
+            for index, message in enumerate(messages)
+            if isinstance(message.get("content"), list)
+            for block in message["content"]
+            if block.get("type") == "tool_result" and block.get("tool_use_id") in self.pending
+        ]
+        results = [block for _, block in matches]
         tools = digest(semantic(body.get("tools", [])))
         effort = body.get("output_config", {}).get("effort") or "medium"
         if results:
@@ -258,7 +265,8 @@ class Bridge:
                 "model": turn is not None and turn.model == body["model"],
                 "effort": turn is not None
                 and turn.effort == (body.get("output_config", {}).get("effort") or turn.effort),
-                "history": turn is not None and turn.history == history_digest(messages[:-1]),
+                "history": turn is not None
+                and turn.history == history_digest(messages[: matches[0][0]]),
             }
             self.resume_diagnostic = checks
             if not all(checks.values()):
@@ -274,7 +282,7 @@ class Bridge:
                             "contentItems": [
                                 {
                                     "type": "inputText",
-                                    "text": json.dumps(results[0].get("content", "")),
+                                    "text": json.dumps(messages[matches[0][0] :]),
                                 }
                             ],
                             "success": not results[0].get("is_error", False),

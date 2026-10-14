@@ -128,9 +128,11 @@ async def test_tool_result_resumes_the_same_rpc_and_all_usage_is_retained():
                 {"type": "tool_result", "tool_use_id": call["id"], "content": "FILE_RESULT"}
             ],
         },
+        {"role": "user", "content": [{"type": "text", "text": "A new Claude reminder"}]},
     ]
     assert await bridge.start(body) is turn
     assert "FILE_RESULT" in rpc.ws.sent[-1]
+    assert "A new Claude reminder" in rpc.ws.sent[-1]
     assert '"id": 17' in rpc.ws.sent[-1]
     # Tool request counters can arrive after the tool-call boundary. The
     # final response must retain both generations, not just tokenUsage.last.
