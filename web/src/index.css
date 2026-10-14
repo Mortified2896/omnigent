@@ -1814,7 +1814,11 @@ aside[aria-label="Workspace"][data-maximized] {
 /* Current word in a generated read-along. A CSS Highlight paints the existing
    Markdown text range without wrapping React-owned nodes or changing layout. */
 ::highlight(omnigent-audio-current-word) {
-  background-color: color-mix(in oklch, var(--warning) 28%, transparent);
+  background-color: #fbbf24;
+  color: #17120a;
+  text-decoration: underline;
+  text-decoration-color: #92400e;
+  text-decoration-thickness: 2px;
 }
 
 /* Embedded browsers may not implement CSS Custom Highlights. The fallback
@@ -1829,11 +1833,13 @@ aside[aria-label="Workspace"][data-maximized] {
 .omnigent-read-along-fallback > span {
   position: absolute;
   border-radius: 2px;
-  background: rgba(245, 185, 45, 0.34);
+  background: rgba(251, 191, 36, 0.55);
+  outline: 2px solid #d97706;
   mix-blend-mode: multiply;
 }
 .dark .omnigent-read-along-fallback > span {
-  background: rgba(245, 185, 45, 0.23);
+  background: rgba(251, 191, 36, 0.42);
+  outline-color: #fbbf24;
   mix-blend-mode: screen;
 }
 
