@@ -1,3 +1,7 @@
+import {
+  GeneratedAudioDock,
+  GeneratedAudioDockProvider,
+} from "@/components/chat/GeneratedAudioDock";
 import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
 import { FeedbackDiscussionComposerContext } from "@/components/FeedbackDiscussionControls";
 import { isFeedbackReviewFocused } from "@/components/ai-elements/conversation";
@@ -1899,7 +1903,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
     <>
       {terminalSurfaces}
       {!showTerminal && (
-        <>
+        <GeneratedAudioDockProvider>
           {/* The scrolling transcript column owns every streaming-hot store
           subscription and the bubble pipeline, so an SSE frame re-renders it
           alone — this surface's composer and chrome below bail out. */}
@@ -1928,6 +1932,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
             }
           />
 
+          <GeneratedAudioDock />
           <Composer
             ref={composerRef}
             disabled={disabled}
@@ -1982,7 +1987,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
           Sits below the composer so its position is consistent with the
           terminal view. */}
           <ConnectionIndicator liveness={liveness} onShowReconnectHelp={onShowReconnectHelp} />
-        </>
+        </GeneratedAudioDockProvider>
       )}
     </>
   );

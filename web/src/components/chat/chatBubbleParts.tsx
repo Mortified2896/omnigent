@@ -1132,17 +1132,6 @@ function AssistantBubble({
             flashing && "animate-message-highlight rounded-lg",
           )}
         >
-          {!foldOnly &&
-            !errorOnly &&
-            bubble.lifecycle === "completed" &&
-            bubble.responseId &&
-            conversationId && (
-              <GeneratedResponseAudioPlayer
-                sessionId={conversationId}
-                responseId={bubble.responseId}
-                pollForNewAudio={isLastAssistant}
-              />
-            )}
           <BlockRenderer
             items={bubble.items}
             sessionStatus={sessionStatus}
@@ -1156,6 +1145,17 @@ function AssistantBubble({
             defaultExpanded={bubble.defaultExpanded}
             onRetryError={recoveryDisabled ? undefined : handleRetryError}
           />
+          {!foldOnly &&
+            !errorOnly &&
+            bubble.lifecycle === "completed" &&
+            bubble.responseId &&
+            conversationId && (
+              <GeneratedResponseAudioPlayer
+                sessionId={conversationId}
+                responseId={bubble.responseId}
+                pollForNewAudio={isLastAssistant}
+              />
+            )}
         </MessageContent>
         {bubble.lifecycle === "cancelled" && (
           <p

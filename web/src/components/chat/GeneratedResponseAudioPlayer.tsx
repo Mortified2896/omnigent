@@ -1,4 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import {
+  PauseIcon,
+  PlayIcon,
+  RotateCcwIcon,
+  RotateCwIcon,
+  Volume2Icon,
+  VolumeXIcon,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { GeneratedAudioDockContext } from "./GeneratedAudioDock";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/identity";
 import { getOmnigentHostConfig } from "@/lib/host";
@@ -110,6 +121,56 @@ export function GeneratedResponseAudioPlayer({
   });
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioElement, setAudioElement] = useState<HTMLAudioElement | null>(null);
+  const dock = useContext(GeneratedAudioDockContext);
+  const playerKey = `${sessionId}:${responseId}`;
+  const selectDock = dock?.select;
+  const docked = Boolean(
+    dock?.element && (dock.activeKey ? dock.activeKey === playerKey : pollForNewAudio),
+  );
+  const renderControls = (node: ReactNode) =>
+    docked && dock?.element ? createPortal(node, dock.element) : node;
+  const [position, setPosition] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [muted, setMuted] = useState(false);
+  const [mediaDuration, setMediaDuration] = useState<number | null>(null);
+  const duration = mediaDuration ?? entry?.duration_seconds ?? 0;
+  const clock = (seconds: number) => {
+    const value = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+    return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
+  };
+  const seek = (seconds: number) => {
+    if (!audioElement) return;
+    audioElement.currentTime = Math.min(duration, Math.max(0, seconds));
+    setPosition(audioElement.currentTime);
+  };
+  const togglePlayback = async () => {
+    if (!audioElement) return;
+    selectDock?.(playerKey);
+    if (!audioElement.paused) audioElement.pause();
+    else {
+      try {
+        await audioElement.play();
+      } catch {
+        setMediaFailed(true);
+      }
+    }
+  };
+  useEffect(
+    () => () => selectDock?.((active) => (active === playerKey ? null : active)),
+    [playerKey, selectDock],
+  );
+  useEffect(() => {
+    if (dock?.activeKey && dock.activeKey !== playerKey && audioElement && !audioElement.paused) {
+      audioElement.pause();
+    }
+  }, [dock?.activeKey, playerKey, audioElement]);
+  useEffect(
+    () => () => {
+      if (audioElement && !audioElement.paused) audioElement.pause();
+    },
+    [audioElement],
+  );
 
   useEffect(() => {
     if (!contentQuery.data) {
@@ -171,7 +232,15 @@ export function GeneratedResponseAudioPlayer({
     };
     rebuildRanges();
     let rebuildFrame: number | null = null;
-    const observer = new MutationObserver(() => {
+    const observer = new MutationObserver((records) => {
+      if (
+        records.every((record) =>
+          (record.target instanceof Element ? record.target : record.target.parentElement)?.closest(
+            "[data-audio-player-controls]",
+          ),
+        )
+      )
+        return;
       if (rebuildFrame !== null) return;
       rebuildFrame = requestAnimationFrame(() => {
         rebuildFrame = null;
@@ -204,23 +273,23 @@ export function GeneratedResponseAudioPlayer({
   if (listQuery.isError) return null;
   if (!entry) return null;
   if (entry.status === "pending" || entry.status === "processing") {
-    return (
+    return renderControls(
       <span className="text-[11px] text-muted-foreground" role="status">
         Preparing audio…
-      </span>
+      </span>,
     );
   }
   if (entry.status === "failed") {
-    return (
+    return renderControls(
       <span className="text-[11px] text-muted-foreground" role="status">
         {entry.error_code === "audio_expired" || entry.error_code === "audio_expiring"
           ? "Recording removed after the retention period. The written report is still available."
           : "Audio unavailable"}
-      </span>
+      </span>,
     );
   }
   if (useBlobTransport && contentQuery.isError) {
-    return (
+    return renderControls(
       <div className="mb-4 flex flex-col gap-2 text-sm text-muted-foreground" role="status">
         <span>Audio download was interrupted.</span>
         <div className="flex gap-3">
@@ -231,32 +300,137 @@ export function GeneratedResponseAudioPlayer({
             Open the recording
           </a>
         </div>
-      </div>
+      </div>,
     );
   }
   if (useBlobTransport && !audioUrl) {
-    return (
+    return renderControls(
       <span className="text-[11px] text-muted-foreground" role="status">
         Loading audio…
-      </span>
+      </span>,
     );
   }
+  const controls = (
+    <div
+      role="region"
+      aria-label="Response audio player"
+      data-audio-player-controls
+      className="flex w-full flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-2 py-2 shadow-sm sm:flex-nowrap"
+    >
+      <div className="flex shrink-0 items-center gap-0.5">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-9 sm:size-8"
+          aria-label="Back 15 seconds"
+          title="Back 15 seconds"
+          onClick={() => seek((audioElement?.currentTime ?? position) - 15)}
+          disabled={!audioElement}
+        >
+          <span className="relative">
+            <RotateCcwIcon className="size-5" />
+            <span className="absolute inset-0 flex items-center justify-center text-[8px] font-semibold">
+              15
+            </span>
+          </span>
+        </Button>
+        <Button
+          size="icon-sm"
+          className="size-9 sm:size-8"
+          aria-label={playing ? "Pause audio" : "Play audio"}
+          title={playing ? "Pause" : "Play"}
+          onClick={() => void togglePlayback()}
+          disabled={!audioElement}
+        >
+          {playing ? <PauseIcon className="size-4" /> : <PlayIcon className="size-4" />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-9 sm:size-8"
+          aria-label="Forward 15 seconds"
+          title="Forward 15 seconds"
+          onClick={() => seek((audioElement?.currentTime ?? position) + 15)}
+          disabled={!audioElement}
+        >
+          <span className="relative">
+            <RotateCwIcon className="size-5" />
+            <span className="absolute inset-0 flex items-center justify-center text-[8px] font-semibold">
+              15
+            </span>
+          </span>
+        </Button>
+      </div>
+      <div className="order-first flex w-full min-w-0 flex-col gap-1 sm:order-none sm:w-auto sm:flex-1">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="truncate font-medium">Listen along</span>
+          <span className="whitespace-nowrap text-muted-foreground tabular-nums">
+            {clock(position)} / {clock(duration)}
+          </span>
+        </div>
+        <input
+          type="range"
+          aria-label="Audio position"
+          aria-valuetext={`${clock(position)} of ${clock(duration)}`}
+          min={0}
+          max={duration || 1}
+          step={1}
+          value={Math.min(position, duration)}
+          onChange={(event) => seek(Number(event.target.value))}
+          disabled={!duration || !audioElement}
+          className="h-5 w-full cursor-pointer accent-primary sm:h-4"
+        />
+      </div>
+      <select
+        aria-label="Playback speed"
+        value={playbackRate}
+        onChange={(event) => {
+          const value = Number(event.target.value);
+          setPlaybackRate(value);
+          if (audioElement) audioElement.playbackRate = value;
+        }}
+        className="ml-auto h-9 shrink-0 rounded-md border border-input bg-background px-1 text-xs font-medium sm:ml-0 sm:h-8"
+      >
+        {[0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (
+          <option key={speed} value={speed}>
+            {speed}×
+          </option>
+        ))}
+      </select>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="size-9 sm:size-8"
+        aria-label={muted ? "Unmute audio" : "Mute audio"}
+        title={muted ? "Unmute" : "Mute"}
+        onClick={() => {
+          if (audioElement) audioElement.muted = !muted;
+          setMuted(!muted);
+        }}
+      >
+        {muted ? <VolumeXIcon className="size-4" /> : <Volume2Icon className="size-4" />}
+      </Button>
+    </div>
+  );
   return (
-    <div className="mb-4 flex w-full flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3">
-      <span className="text-sm font-medium">Listen to this response</span>
-      {mediaFailed && (
-        <span role="status" className="text-sm text-muted-foreground">
-          Audio could not load. You can{" "}
-          <a className="underline" href={contentPath}>
-            open the recording
-          </a>
-          .
-        </span>
+    <>
+      {renderControls(
+        <>
+          {controls}
+          {mediaFailed && (
+            <span role="status" className="text-sm text-muted-foreground">
+              Audio could not load. You can{" "}
+              <a className="underline" href={contentPath}>
+                open the recording
+              </a>
+              .
+            </span>
+          )}
+        </>,
       )}
       <audio
         ref={setAudioElement}
-        className="h-9 w-full max-w-[360px]"
-        controls
+        className="hidden"
         preload="metadata"
         src={useBlobTransport ? (audioUrl ?? undefined) : contentPath}
         onError={(event) => {
@@ -275,7 +449,13 @@ export function GeneratedResponseAudioPlayer({
         onLoadedMetadata={() => {
           const pending = blobFallbackPlayback.current;
           const audio = audioElement;
-          if (!pending || !audio) return;
+          if (!audio) return;
+          audio.playbackRate = playbackRate;
+          audio.muted = muted;
+          if (Number.isFinite(audio.duration) && audio.duration > 0)
+            setMediaDuration(audio.duration);
+          setPosition(audio.currentTime);
+          if (!pending) return;
           blobFallbackPlayback.current = null;
           if (
             Number.isFinite(pending.position) &&
@@ -283,12 +463,21 @@ export function GeneratedResponseAudioPlayer({
             (!Number.isFinite(audio.duration) || pending.position < audio.duration)
           ) {
             audio.currentTime = pending.position;
+            setPosition(audio.currentTime);
           }
           if (pending.resume) void audio.play().catch(() => undefined);
         }}
         onCanPlay={() => setMediaFailed(false)}
+        onDurationChange={(event) => {
+          const value = event.currentTarget.duration;
+          if (Number.isFinite(value) && value > 0) setMediaDuration(value);
+        }}
+        onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
         aria-label="Listen to this response"
       />
-    </div>
+    </>
   );
 }

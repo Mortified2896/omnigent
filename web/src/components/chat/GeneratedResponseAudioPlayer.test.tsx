@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GeneratedResponseAudioPlayer } from "./GeneratedResponseAudioPlayer";
+import { GeneratedAudioDock, GeneratedAudioDockProvider } from "./GeneratedAudioDock";
 import { clearReadAlongHighlight, setReadAlongHighlight } from "./readAlongHighlight";
 
 const authenticatedFetch = vi.hoisted(() => vi.fn());
@@ -97,7 +98,12 @@ function timings(text: string[]) {
   };
 }
 
+beforeEach(() => {
+  vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+});
+
 afterEach(() => {
+  cleanup();
   hostConfig.fetcher = undefined;
   vi.useRealTimers();
   authenticatedFetch.mockReset();
@@ -157,7 +163,7 @@ describe("GeneratedResponseAudioPlayer", () => {
     expect(screen.queryByLabelText("Listen to this response")).not.toBeInTheDocument();
   });
 
-  it("shows accessible native playback controls for the matching response", async () => {
+  it("shows accessible playback controls for the matching response", async () => {
     authenticatedFetch.mockImplementation((url: string) =>
       Promise.resolve(
         String(url).endsWith("/timings")
@@ -170,7 +176,9 @@ describe("GeneratedResponseAudioPlayer", () => {
     renderPlayer();
     const player = await screen.findByLabelText("Listen to this response");
     expect(player.tagName).toBe("AUDIO");
-    expect(player).toHaveAttribute("controls");
+    expect(player).not.toHaveAttribute("controls");
+    expect(screen.getByRole("button", { name: "Play audio" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Audio position" })).toBeInTheDocument();
     expect(player).toHaveAttribute(
       "src",
       "/v1/sessions/session-1/generated-audio/response-1/content?format=mp3",
@@ -319,7 +327,7 @@ describe("GeneratedResponseAudioPlayer", () => {
     );
     renderPlayer();
     const player = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
-    expect(player).toHaveAttribute("controls");
+    expect(player).not.toHaveAttribute("controls");
     expect(screen.queryByText("Audio unavailable")).not.toBeInTheDocument();
     player.currentTime = 1.5;
     fireEvent.seeking(player);
@@ -401,5 +409,135 @@ describe("GeneratedResponseAudioPlayer", () => {
 
     view.unmount();
     expect(currentHighlightText()).toEqual([]);
+  });
+});
+
+describe("compact audio transport", () => {
+  function mockReady() {
+    authenticatedFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/timings")
+          ? { ok: false, json: async () => ({}) }
+          : response({ data: [readyAudioRow("response-1")] }),
+      ),
+    );
+  }
+
+  it("seeks, clamps skip controls, changes speed, and synchronizes play/pause and mute", async () => {
+    mockReady();
+    renderPlayer();
+    const audio = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    Object.defineProperty(audio, "duration", { configurable: true, value: 120 });
+    fireEvent.loadedMetadata(audio);
+    let paused = true;
+    Object.defineProperty(audio, "paused", { configurable: true, get: () => paused });
+    vi.spyOn(audio, "play").mockImplementation(async () => {
+      paused = false;
+      fireEvent.play(audio);
+    });
+    vi.spyOn(audio, "pause").mockImplementation(() => {
+      paused = true;
+      fireEvent.pause(audio);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Forward 15 seconds" }));
+    expect(audio.currentTime).toBe(15);
+    fireEvent.click(screen.getByRole("button", { name: "Back 15 seconds" }));
+    expect(audio.currentTime).toBe(0);
+    fireEvent.change(screen.getByRole("slider", { name: "Audio position" }), {
+      target: { value: "90" },
+    });
+    expect(audio.currentTime).toBe(90);
+    expect(screen.getByText("1:30 / 2:00")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Playback speed" }), {
+      target: { value: "1.5" },
+    });
+    expect(audio.playbackRate).toBe(1.5);
+    fireEvent.click(screen.getByRole("button", { name: "Mute audio" }));
+    expect(audio.muted).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Play audio" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Pause audio" }));
+    expect(audio.pause).toHaveBeenCalled();
+    audio.currentTime = 119;
+    fireEvent.timeUpdate(audio);
+    fireEvent.click(screen.getByRole("button", { name: "Forward 15 seconds" }));
+    expect(audio.currentTime).toBe(120);
+  });
+
+  it("docks controls outside the report while retaining the audio in its response for highlighting", async () => {
+    mockReady();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <GeneratedAudioDockProvider>
+          <div data-testid="report" data-response-id="response-1">
+            <div data-testid="assistant-text-section">Hello world.</div>
+            <GeneratedResponseAudioPlayer
+              sessionId="session-1"
+              responseId="response-1"
+              pollForNewAudio
+            />
+          </div>
+          <GeneratedAudioDock />
+        </GeneratedAudioDockProvider>
+      </QueryClientProvider>,
+    );
+    const audio = await screen.findByLabelText("Listen to this response");
+    const dock = screen.getByTestId("generated-audio-dock");
+    expect(within(dock).getByRole("button", { name: "Play audio" })).toBeInTheDocument();
+    expect(screen.getByTestId("report")).toContainElement(audio);
+    expect(
+      within(screen.getByTestId("report")).queryByRole("button", { name: "Play audio" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("selects an older recording without remounting media and pauses the previous recording", async () => {
+    authenticatedFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/timings")
+          ? { ok: false, json: async () => ({}) }
+          : response({ data: [readyAudioRow("older"), readyAudioRow("latest")] }),
+      ),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <GeneratedAudioDockProvider>
+          {["older", "latest"].map((id) => (
+            <div key={id} data-testid={id} data-response-id={id}>
+              <GeneratedResponseAudioPlayer
+                sessionId="session-1"
+                responseId={id}
+                pollForNewAudio={id === "latest"}
+              />
+            </div>
+          ))}
+          <GeneratedAudioDock />
+        </GeneratedAudioDockProvider>
+      </QueryClientProvider>,
+    );
+    await screen.findAllByLabelText("Listen to this response");
+    const older = within(screen.getByTestId("older"));
+    const olderAudio = older.getByLabelText("Listen to this response") as HTMLAudioElement;
+    const latestAudio = within(screen.getByTestId("latest")).getByLabelText(
+      "Listen to this response",
+    ) as HTMLAudioElement;
+    Object.defineProperty(latestAudio, "paused", { configurable: true, value: false });
+    const pauseLatest = vi.spyOn(latestAudio, "pause");
+    const playOlder = vi.spyOn(olderAudio, "play").mockImplementation(async () => {
+      fireEvent.play(olderAudio);
+    });
+    fireEvent.click(older.getByRole("button", { name: "Play audio" }));
+    expect(playOlder).toHaveBeenCalledOnce();
+    await waitFor(() => expect(pauseLatest).toHaveBeenCalledOnce());
+    expect(
+      within(screen.getByTestId("generated-audio-dock")).getByRole("button", {
+        name: "Pause audio",
+      }),
+    ).toBeInTheDocument();
+    expect(older.queryByRole("button", { name: "Pause audio" })).not.toBeInTheDocument();
+    expect(older.getByLabelText("Listen to this response")).toBe(olderAudio);
+    expect(
+      within(screen.getByTestId("latest")).getByRole("button", { name: "Play audio" }),
+    ).toBeInTheDocument();
   });
 });

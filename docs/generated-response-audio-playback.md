@@ -14,10 +14,18 @@ unqualified content URL still receive the original WAV. No model inference,
 trimming, or alignment pass occurs. Seekable MP3 output retains gapless delay
 metadata so playback positions use the original sample timeline.
 
-The web player requests the smaller representation, retains native controls,
-and retries a failed media request through the authenticated Blob transport.
-An interrupted Blob download exposes a Retry audio button. The read-along
-listeners follow the mounted audio element, including fallback remounts.
+The web player requests the smaller representation and keeps compact controls
+above the reply box, outside the scrolling report. They include play/pause,
+15-second skip buttons, a seek bar, elapsed/total time, playback speed, and mute.
+Phone layouts give the progress bar its own row. Earlier responses offer controls
+after their text; playing one selects it for the dock and pauses other recordings.
+The audio element remains inside its response, so moving the controls does not
+restart playback or detach read-along highlighting.
+
+A failed media request retries through the authenticated Blob transport. An
+interrupted Blob download exposes a Retry audio button. Playback position, speed,
+and mute carry over to this fallback. The read-along listeners follow the mounted
+audio element, including fallback remounts.
 
 Word mapping uses a global monotonic sequence alignment, including joined
 punctuation tokens such as GPT-5.5. This prevents narrated but collapsed work
