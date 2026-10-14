@@ -8,7 +8,9 @@ import * as readAlong from "./readAlongHighlight";
 
 const authenticatedFetch = vi.hoisted(() => vi.fn());
 const hostConfig = vi.hoisted(() => ({ fetcher: undefined as undefined | (() => void) }));
+const serverOrigin = vi.hoisted(() => ({ local: false }));
 vi.mock("@/lib/host", () => ({ getOmnigentHostConfig: () => hostConfig }));
+vi.mock("@/lib/serverOrigin", () => ({ isCurrentServerLocal: () => serverOrigin.local }));
 vi.mock("@/lib/identity", () => ({ authenticatedFetch }));
 
 function response(body: unknown, blob?: Blob) {
@@ -106,6 +108,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   hostConfig.fetcher = undefined;
+  serverOrigin.local = false;
   vi.useRealTimers();
   authenticatedFetch.mockReset();
   vi.restoreAllMocks();
@@ -228,6 +231,52 @@ describe("GeneratedResponseAudioPlayer", () => {
     );
     expect(authenticatedFetch).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("Loading audio…")).not.toBeInTheDocument();
+  });
+
+  it("preloads local recordings with priority and reuses the same cached download", async () => {
+    serverOrigin.local = true;
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:local-report");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    authenticatedFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/content")
+          ? response(null, new Blob(["mp3"]))
+          : url.endsWith("/timings")
+            ? response(timings(["Hello", "world"]))
+            : response({ data: [readyAudioRow("response-1")] }),
+      ),
+    );
+    const view = renderPlayer();
+    const audio = await screen.findByLabelText("Listen to this response");
+    expect(audio).toHaveAttribute("src", "blob:local-report");
+    expect(audio).toHaveAttribute("preload", "auto");
+    expect(authenticatedFetch).toHaveBeenCalledWith("/v1/sessions/session-1/generated-audio", {
+      priority: "high",
+    });
+    expect(authenticatedFetch).toHaveBeenCalledWith(
+      "/v1/sessions/session-1/generated-audio/response-1/content?format=mp3",
+      { priority: "high" },
+    );
+    // Remount within the same query cache, as when returning to the report.
+    const renderCached = (key: string) => (
+      <QueryClientProvider client={view.client}>
+        <GeneratedResponseAudioPlayer
+          key={key}
+          sessionId="session-1"
+          responseId="response-1"
+          pollForNewAudio
+        />
+      </QueryClientProvider>
+    );
+    view.rerender(renderCached("return-to-report"));
+    expect(await screen.findByLabelText("Listen to this response")).toHaveAttribute(
+      "src",
+      "blob:local-report",
+    );
+    expect(authenticatedFetch.mock.calls.filter(([url]) => url.includes("/content"))).toHaveLength(
+      1,
+    );
+    expect(revoke).toHaveBeenCalledWith("blob:local-report");
   });
 
   it("preserves the authenticated blob transport for embedded hosts", async () => {

@@ -35,6 +35,14 @@ interrupted Blob download exposes a Retry audio button. Playback position, speed
 and mute carry over to this fallback. The read-along listeners follow the mounted
 audio element, including fallback remounts.
 
+On loopback servers (the Mac app's local server), ready recordings preload through
+a high-priority authenticated fetch into an in-memory Blob. Playback then starts
+from that copy, avoiding native media requests waiting behind other chat traffic.
+The ordinary query cache reuses it when returning to the same report; the URL is
+released when its player unmounts. Audio metadata requests also use high priority.
+Remote servers retain native byte-range playback. Server retention and generation
+are unchanged, and loading a saved recording never regenerates speech.
+
 Word mapping uses a global monotonic sequence alignment, including joined
 punctuation tokens such as GPT-5.5. This prevents narrated but collapsed work
 notes from greedily consuming words in the final answer. DOM changes from lazy
