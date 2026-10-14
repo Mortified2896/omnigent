@@ -23,6 +23,20 @@ from omnigent.model_advisor_provider_workflow import (
 from tests.model_advisor.test_provider_workflow import CATALOG, GLM_HIGH, OPENAI_LOW, PREFERENCES
 
 
+def test_jev_distinguishes_both_harnesses_on_the_same_openai_checkpoint():
+    from omnigent.model_advisor_provider_policy import LogicalChoice, advisor_input
+
+    claude = LogicalChoice("openai", OPENAI_LOW.model_id, "low", "claude-native")
+    request = advisor_input("Read the file", (OPENAI_LOW, claude))
+    criteria = build_jev_request(request)["questions"]["route"]["criteria"]
+    assert len(criteria) == 2
+    assert "Harness: claude-native" in criteria[claude.choice_id]
+    assert "Harness: codex-native" in criteria[OPENAI_LOW.choice_id]
+    request["candidates"][0]["harness"] = "unqualified-harness"
+    with pytest.raises(AdvisorCallError):
+        build_jev_request(request)
+
+
 def jev_round():
     frozen = freeze_logical_round(
         owner_id="owner",

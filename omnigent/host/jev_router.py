@@ -63,20 +63,31 @@ def build_jev_request(request: dict[str, object]) -> JevRequest:
         raise AdvisorCallError("Invalid Jev routing request")
     criteria: dict[str, str] = {}
     for candidate in candidates:
-        if not isinstance(candidate, dict) or set(candidate) != {
+        keys = {
             "candidate_id",
             "provider",
             "model_id",
             "reasoning_effort",
-        }:
+        }
+        if not isinstance(candidate, dict) or set(candidate) not in (keys, keys | {"harness"}):
             raise AdvisorCallError("Invalid Jev model choice")
         try:
             choice = LogicalChoice(
-                candidate["provider"], candidate["model_id"], candidate["reasoning_effort"]
+                candidate["provider"],
+                candidate["model_id"],
+                candidate["reasoning_effort"],
+                "claude-native"
+                if candidate.get("harness") == "claude-native"
+                and candidate["provider"] == "openai"
+                else None,
             )
         except ProviderPolicyError as exc:
             raise AdvisorCallError("Invalid Jev model choice") from exc
-        if candidate["candidate_id"] != choice.choice_id or choice.choice_id in criteria:
+        if (
+            candidate.get("harness", choice.harness) != choice.harness
+            or candidate["candidate_id"] != choice.choice_id
+            or choice.choice_id in criteria
+        ):
             raise AdvisorCallError("Invalid or duplicate Jev choice id")
         criteria[choice.choice_id] = (
             f"Harness: {choice.harness}; provider: {choice.provider}; model: {choice.model_id}; "
