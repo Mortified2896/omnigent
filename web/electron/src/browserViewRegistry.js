@@ -74,6 +74,8 @@ function createBrowserViewRegistry({
   openUrlExternal = () => {}, // (url) => shell.openExternal(url)
   copyTextToClipboard = () => {}, // (text) => clipboard.writeText(text)
   showContextMenu = () => {}, // (items) => Menu.buildFromTemplate(items).popup(...)
+  additionalContextMenuItems = () => [], // native-only local preferences
+  prepareSession = null, // restore explicitly remembered cookies before navigation
   onSuppressionChange = () => {}, // dismiss shell-owned UI when an overlay hides the pane
   cap = DEFAULT_CAP,
   // Partition namespace for this registry's views — see agentPartition.
@@ -144,6 +146,7 @@ function createBrowserViewRegistry({
       designModeInputListener: null,
       designModeWebContents: null,
       recentSessionSwitching: false,
+      sessionReady: null,
     };
     return entry;
   }
@@ -242,6 +245,11 @@ function createBrowserViewRegistry({
       if (typeof params.selectionText === "string" && params.selectionText.trim() !== "") {
         if (items.length > 0) items.push({ type: "separator" });
         items.push({ label: "Copy", click: () => wc.copy() });
+      }
+      const extra = additionalContextMenuItems(entry);
+      if (extra.length) {
+        if (items.length) items.push({ type: "separator" });
+        items.push(...extra);
       }
       if (items.length === 0) return;
       showContextMenu(items);
@@ -407,7 +415,23 @@ function createBrowserViewRegistry({
       if (created || force || entry.lastRequestedUrl !== url) {
         entry.lastRequestedUrl = url;
         try {
-          entry.view.webContents.loadURL(url);
+          if (prepareSession) {
+            entry.sessionReady ??= Promise.resolve().then(() =>
+              prepareSession(conversationId, entry.view.webContents.session),
+            );
+            void entry.sessionReady
+              .then(() => {
+                if (get(conversationId) === entry && entry.lastRequestedUrl === url)
+                  return entry.view.webContents.loadURL(url);
+              })
+              .catch(() =>
+                sendToRenderer("browser-nav-blocked", {
+                  conversationId,
+                  url,
+                  error: "The browser could not open this page.",
+                }),
+              );
+          } else entry.view.webContents.loadURL(url);
         } catch (e) {
           return { ok: false, error: `loadURL failed: ${e && e.message ? e.message : e}` };
         }

@@ -465,6 +465,28 @@ sequenceDiagram
     S-->>A: result JSON (or clean timeout)
 ```
 
+### Remembering website logins
+
+Right-click inside the embedded browser and enable **Remember logins after
+restarting Omnigent**. This saves that conversation's website cookies locally,
+encrypted with Electron `safeStorage` and the operating system's key storage.
+Google sign-in and an application's own session cookie can both be restored;
+session cookies retain their original form and persistent cookies retain their
+expiry. The website can still expire or revoke a login. Other conversations,
+servers and the shell's own account remain isolated.
+
+Saving is off by default. The native menu offers the option; browser
+pages cannot grant it and there is no browser-tool or renderer IPC for enabling it. Disabling the option deletes the encrypted
+cookie copy and stops further saves; the currently open session continues until
+closed. Logging out updates the saved copy. Browser cache, local storage and
+history remain temporary. Saved data is private application data and must never
+be committed, exported to the server, or logged. No plaintext fallback is used
+when OS encryption is unavailable.
+
+Run `node e2e/remembered_browser_logins.e2e.js` from this package for the real
+Electron restart check, including first-request authentication, conversation
+isolation and forgetting the saved login. It uses an isolated dummy login.
+
 ### Local network permission
 
 Sites in the embedded pane can ask for **local network access**, including

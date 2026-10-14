@@ -26,6 +26,7 @@ const {
   nativeTheme,
   screen,
   session,
+  safeStorage,
   shell,
   systemPreferences,
 } = require("electron");
@@ -67,6 +68,7 @@ const { registerServerAwayWatch, AWAY_BANNER_DELAY_MS } = require("./away_banner
 const { createReturnBanner } = require("./return_banner");
 const { createReconnectOverlay } = require("./reconnect_overlay");
 const { createBrowserViewRegistry } = require("./browserViewRegistry");
+const { createRememberedBrowserLogins } = require("./rememberedBrowserLogins");
 const { createBrowserViewBoundsController } = require("./browserViewBounds");
 const { registerBrowserIpc } = require("./browserIpc");
 const { isDeveloperModeEnabled } = require("./developer_mode");
@@ -1482,6 +1484,17 @@ const reconnectOverlay = createReconnectOverlay({
 });
 
 const browserPermissionStore = createBrowserPermissionStore({ loadSettings, saveSettings });
+const rememberedBrowserLogins = createRememberedBrowserLogins({
+  directory: () => path.join(app.getPath("userData"), "remembered-browser-logins"),
+  safeStorage,
+  loadSettings,
+  saveSettings,
+  onError: () =>
+    dialog.showErrorBox(
+      "Browser login could not be saved",
+      "Your current browser session stays open. Try enabling Remember logins again.",
+    ),
+});
 const browserPermissionPrompt = createBrowserPermissionPrompt({
   BrowserWindow,
   ipcMain,
@@ -2221,7 +2234,8 @@ function registerNavigationFallbacks(win) {
           pinWindow(win, null);
           // DNS/VPN may still be reconnecting right after wake: retry behind the overlay.
           const hint = reconnectingHint(validatedURL);
-          if (scheduleReconnect(win, serverUrl, validatedURL, { hint, finalMessage: error })) return;
+          if (scheduleReconnect(win, serverUrl, validatedURL, { hint, finalMessage: error }))
+            return;
         }
         showConnectFailure(win, url, error);
       });
@@ -3537,6 +3551,45 @@ function createBrowserRegistryForWindow(win) {
     openUrlExternal: (url) => void shell.openExternal(url),
     showContextMenu: (items) => {
       Menu.buildFromTemplate(items).popup({ window: win });
+    },
+    prepareSession: async (viewId, browserSession) => {
+      const serverUrl = windows.get(win)?.serverUrl;
+      if (!serverUrl) return;
+      try {
+        await rememberedBrowserLogins.prepare(serverUrl, viewId, browserSession);
+      } catch {
+        dialog.showErrorBox(
+          "Saved browser login could not be restored",
+          "The browser will open signed out. Sign in again, then enable Remember logins to replace the saved session.",
+        );
+      }
+    },
+    additionalContextMenuItems: (entry) => {
+      const serverUrl = windows.get(win)?.serverUrl;
+      if (!serverUrl) return [];
+      return [
+        {
+          label: "Remember logins after restarting Omnigent",
+          type: "checkbox",
+          checked: rememberedBrowserLogins.isRemembered(serverUrl, entry.conversationId),
+          click: async (item) => {
+            try {
+              if (item.checked)
+                await rememberedBrowserLogins.remember(
+                  serverUrl,
+                  entry.conversationId,
+                  entry.view.webContents.session,
+                );
+              else await rememberedBrowserLogins.forget(serverUrl, entry.conversationId);
+            } catch {
+              dialog.showErrorBox(
+                "Browser login preference was not saved",
+                "Your current session stays open. The saved-login setting could not be changed.",
+              );
+            }
+          },
+        },
+      ];
     },
   });
   win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
@@ -4977,6 +5030,7 @@ if (!gotLock) {
     // never stranding the quit. shutdown() always settles: host children are
     // SIGKILL'd within 4s and `omnigent server stop` has its own exec timeout.
     (async () => {
+      await rememberedBrowserLogins.flush().catch(() => {});
       const cliPath = resolvedCliPath();
       await serverManager.shutdown(cliPath);
     })()
