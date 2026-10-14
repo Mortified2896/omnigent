@@ -432,7 +432,7 @@ it("shows a completed Daily Report and removes it when marked read", async () =>
     pending_elicitations_count: 0,
     status: "idle",
     labels: { "omnigent.scheduled_task_id": "daily-task" },
-    viewer_last_seen: 0,
+    viewer_last_seen: null,
   });
   seedReadState([report]);
   vi.mocked(conversationsHook.useConversations).mockReturnValue(conversationsStub([report]));

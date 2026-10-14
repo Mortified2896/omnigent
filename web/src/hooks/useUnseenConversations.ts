@@ -133,6 +133,7 @@ export interface ReadStateSeed {
   viewer_last_seen?: number | null;
   viewer_unread?: boolean;
   updated_at?: number;
+  labels?: Record<string, string>;
 }
 
 /**
@@ -157,7 +158,9 @@ export function seedReadState(conversations: readonly ReadStateSeed[]): void {
     let baseline =
       local !== undefined && server !== undefined ? Math.max(local, server) : (local ?? server);
     if (baseline === undefined && typeof conv.updated_at === "number") {
-      baseline = conv.updated_at;
+      // A report completed while the app was closed still needs delivery.
+      // Ordinary chats retain the existing read-as-of-load behavior.
+      baseline = conv.labels?.["omnigent.scheduled_task_id"] ? 0 : conv.updated_at;
     }
     if (baseline !== undefined && baseline !== local) {
       lastSeenMap[conv.id] = baseline;

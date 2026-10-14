@@ -59,6 +59,22 @@ afterEach(() => {
 });
 
 describe("seedReadState", () => {
+  it("keeps a newly discovered automation unread until opened, including after reload", async () => {
+    const mod = await loadFresh();
+    const row = {
+      id: "report-first-load",
+      updated_at: 2000,
+      viewer_last_seen: null,
+      labels: { "omnigent.scheduled_task_id": "daily-report" },
+    };
+    mod.seedReadState([row]);
+    expect(mod.isConversationUnseen(row.id, row.updated_at, "idle")).toBe(true);
+    mod.markConversationRead(row.id, row.updated_at);
+    expect(mod.isConversationUnseen(row.id, row.updated_at, "idle")).toBe(false);
+    const reloaded = await reloadKeepingStorage();
+    reloaded.seedReadState([row]);
+    expect(reloaded.isConversationUnseen(row.id, row.updated_at, "idle")).toBe(false);
+  });
   it("seeds baselines and unread flags from the conversation list", async () => {
     const mod = await loadFresh();
     mod.seedReadState([
