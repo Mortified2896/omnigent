@@ -17,6 +17,7 @@ import {
   activeReadAlongUnitIndex,
   clearReadAlongHighlight,
   estimateReadAlongUnits,
+  followReadAlongRange,
   mapReadAlongRanges,
   setReadAlongHighlight,
   type ReadAlongUnit,
@@ -143,6 +144,7 @@ export function GeneratedResponseAudioPlayer({
     docked && dock?.element ? createPortal(node, dock.element) : node;
   const [position, setPosition] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [followText, setFollowText] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [muted, setMuted] = useState(false);
   const [mediaDuration, setMediaDuration] = useState<number | null>(null);
@@ -232,7 +234,9 @@ export function GeneratedResponseAudioPlayer({
       const unitIndex = activeReadAlongUnitIndex(units, audio.currentTime);
       if (!force && unitIndex === lastUnitIndex) return;
       lastUnitIndex = unitIndex;
-      setReadAlongHighlight(owner, rangeByUnit.get(unitIndex) ?? null);
+      const range = rangeByUnit.get(unitIndex) ?? null;
+      setReadAlongHighlight(owner, range);
+      if (followText && !audio.paused && range) followReadAlongRange(range);
     };
     const handlePlay = () => updateHighlight(true);
     const handleTimeUpdate = () => {
@@ -295,7 +299,7 @@ export function GeneratedResponseAudioPlayer({
       audio.removeEventListener("ended", handleEnded);
       clearReadAlongHighlight(owner);
     };
-  }, [audioElement, entry?.duration_seconds, responseId, sessionId, timingsQuery.data]);
+  }, [audioElement, entry?.duration_seconds, followText, responseId, sessionId, timingsQuery.data]);
 
   if (listQuery.isError) return null;
   if (!entry) return null;
@@ -439,6 +443,17 @@ export function GeneratedResponseAudioPlayer({
           className="h-5 w-full cursor-pointer accent-primary sm:h-4"
         />
       </div>
+      <Button
+        variant={followText ? "secondary" : "ghost"}
+        size="sm"
+        className="h-9 shrink-0 px-2 text-xs sm:h-8"
+        aria-label="Follow text"
+        aria-pressed={followText}
+        title={followText ? "Turn off automatic text scrolling" : "Follow the spoken text"}
+        onClick={() => setFollowText((value) => !value)}
+      >
+        Follow text
+      </Button>
       <select
         aria-label="Playback speed"
         value={playbackRate}

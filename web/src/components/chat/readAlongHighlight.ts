@@ -11,6 +11,32 @@ export interface VisibleReadAlongRange {
   range: Range;
 }
 
+/** Keep the spoken word in a comfortable reading band, without moving every word. */
+export function followReadAlongRange(range: Range): void {
+  const rect = range.getBoundingClientRect?.();
+  if (!rect || rect.height <= 0) return;
+  let scroller = range.startContainer.parentElement;
+  while (scroller) {
+    if (
+      /^(auto|scroll)$/.test(getComputedStyle(scroller).overflowY) &&
+      scroller.scrollHeight > scroller.clientHeight
+    ) {
+      const top = scroller.getBoundingClientRect().top + scroller.clientTop;
+      const height = scroller.clientHeight;
+      if (rect.top < top + height * 0.2 || rect.bottom > top + height * 0.7) {
+        scroller.scrollTo({
+          top: Math.max(0, scroller.scrollTop + rect.top - top - height * 0.35),
+          behavior: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+            ? "instant"
+            : "smooth",
+        });
+      }
+      return;
+    }
+    scroller = scroller.parentElement;
+  }
+}
+
 /**
  * Estimate word timing when a speech backend returns audio without a timing
  * sidecar. Precise provider timings always take precedence in the player.

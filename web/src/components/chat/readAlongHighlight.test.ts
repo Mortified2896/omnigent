@@ -3,12 +3,65 @@ import {
   activeReadAlongUnitIndex,
   clearReadAlongHighlight,
   estimateReadAlongUnits,
+  followReadAlongRange,
   mapReadAlongRanges,
   setReadAlongHighlight,
   type ReadAlongUnit,
 } from "./readAlongHighlight";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe("read-along scrolling", () => {
+  function setup() {
+    const outer = document.createElement("div");
+    const scroller = document.createElement("div");
+    scroller.style.overflowY = "auto";
+    Object.defineProperties(scroller, {
+      clientHeight: { value: 500 },
+      scrollHeight: { value: 3000 },
+      scrollTop: { value: 200, writable: true },
+    });
+    scroller.getBoundingClientRect = () => ({ top: 100 }) as DOMRect;
+    scroller.scrollTo = vi.fn();
+    outer.scrollTo = vi.fn();
+    const text = document.createTextNode("Spoken word");
+    scroller.appendChild(text);
+    outer.appendChild(scroller);
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    range.getBoundingClientRect = () => ({ top: 550, bottom: 574, height: 24 }) as DOMRect;
+    return { range, scroller, outer };
+  }
+
+  it("follows an offscreen word in the nearest transcript scroller", () => {
+    const { range, scroller, outer } = setup();
+    followReadAlongRange(range);
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 475, behavior: "smooth" });
+    expect(outer.scrollTo).not.toHaveBeenCalled();
+    range.getBoundingClientRect = () => ({ top: 110, bottom: 134, height: 24 }) as DOMRect;
+    followReadAlongRange(range);
+    expect(scroller.scrollTo).toHaveBeenLastCalledWith({ top: 35, behavior: "smooth" });
+  });
+
+  it("keeps visible words still and ignores hidden ranges", () => {
+    const { range, scroller } = setup();
+    range.getBoundingClientRect = () => ({ top: 300, bottom: 324, height: 24 }) as DOMRect;
+    followReadAlongRange(range);
+    range.getBoundingClientRect = () => ({ top: 0, bottom: 0, height: 0 }) as DOMRect;
+    followReadAlongRange(range);
+    expect(scroller.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("respects reduced motion", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    const { range, scroller } = setup();
+    followReadAlongRange(range);
+    expect(scroller.scrollTo).toHaveBeenCalledWith({ top: 475, behavior: "instant" });
+  });
+});
 
 function unit(text: string, start: number, end: number): ReadAlongUnit {
   return {

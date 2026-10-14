@@ -22,6 +22,14 @@ after their text; playing one selects it for the dock and pauses other recording
 The audio element remains inside its response, so moving the controls does not
 restart playback or detach read-along highlighting.
 
+**Follow text** starts enabled: while audio plays, the report scrolls when the
+spoken word leaves the middle reading area. It follows within the transcript's
+scroll container, keeps the controls stationary, and respects reduced-motion
+preferences. Turn it off to browse elsewhere while listening. Pausing stops
+automatic scrolling; seeking during playback follows the new word. The active
+word uses a solid gold background, dark text, and an underline in both themes.
+Browsers without CSS Highlights use a stronger outlined overlay.
+
 A failed media request retries through the authenticated Blob transport. An
 interrupted Blob download exposes a Retry audio button. Playback position, speed,
 and mute carry over to this fallback. The read-along listeners follow the mounted

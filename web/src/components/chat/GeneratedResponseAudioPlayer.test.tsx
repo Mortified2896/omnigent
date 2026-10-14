@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GeneratedResponseAudioPlayer } from "./GeneratedResponseAudioPlayer";
 import { GeneratedAudioDock, GeneratedAudioDockProvider } from "./GeneratedAudioDock";
 import { clearReadAlongHighlight, setReadAlongHighlight } from "./readAlongHighlight";
+import * as readAlong from "./readAlongHighlight";
 
 const authenticatedFetch = vi.hoisted(() => vi.fn());
 const hostConfig = vi.hoisted(() => ({ fetcher: undefined as undefined | (() => void) }));
@@ -374,6 +375,46 @@ describe("GeneratedResponseAudioPlayer", () => {
     player.currentTime = 1.5;
     fireEvent.seeking(player);
     expect(currentHighlightText()).toEqual(["world"]);
+  });
+
+  it("follows playback by default, can opt out, and never scrolls paused seeking", async () => {
+    const follow = vi.spyOn(readAlong, "followReadAlongRange").mockImplementation(() => undefined);
+    authenticatedFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        String(url).endsWith("/timings")
+          ? response(timings(["Hello", "world"]))
+          : response({ data: [readyAudioRow("response-1")] }),
+      ),
+    );
+    const view = renderPlayer();
+    const audio = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    await waitFor(() =>
+      expect(
+        view.client.getQueryData(["generated-response-audio-timings", "session-1", "response-1"]),
+      ).toBeDefined(),
+    );
+    const toggle = screen.getByRole("button", { name: "Follow text" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    audio.currentTime = 0.2;
+    fireEvent.seeking(audio);
+    expect(follow).not.toHaveBeenCalled();
+    Object.defineProperty(audio, "paused", { configurable: true, value: false });
+    fireEvent.play(audio);
+    expect(follow).toHaveBeenCalled();
+    follow.mockClear();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    audio.currentTime = 1.2;
+    fireEvent.timeUpdate(audio);
+    expect(follow).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    expect(follow).toHaveBeenCalled();
+    follow.mockClear();
+    Object.defineProperty(audio, "paused", { configurable: true, value: true });
+    fireEvent.pause(audio);
+    audio.currentTime = 0.2;
+    fireEvent.seeking(audio);
+    expect(follow).not.toHaveBeenCalled();
   });
 
   it("keeps two response players isolated and removes only the unmounted owner", async () => {
