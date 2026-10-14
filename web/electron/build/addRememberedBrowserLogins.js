@@ -48,4 +48,9 @@ let registrySeq = 0;`);
   return { main, registry };
 }
 
-module.exports = { addRememberedBrowserLogins };
+function useLocalServerPort(profile, port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid local server port.");
+  return once(profile, "const CANONICAL_LOCAL_PORT = 6768;", `const CANONICAL_LOCAL_PORT = ${port};`);
+}
+
+module.exports = { addRememberedBrowserLogins, useLocalServerPort };
