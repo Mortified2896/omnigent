@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnigent.harnesses.claude_native.codex_bridge import Bridge, Turn, usage_delta
+from omnigent.harnesses.claude_native.codex_bridge import Bridge, Turn, history_digest, usage_delta
 from omnigent.harnesses.claude_native.codex_subscription import bridge_profile
 from omnigent.harnesses.claude_native.main import ClaudeNativeUcodeConfig
 from omnigent.model_advisor_provider_policy import LogicalChoice, advisor_input
@@ -109,7 +109,7 @@ async def test_tool_result_resumes_the_same_rpc_and_all_usage_is_retained():
     from omnigent.harnesses.claude_native.codex_bridge import digest
 
     turn = Turn(
-        rpc, "fixture-model", digest(body["messages"]), digest([]), "low", "fixture-thread"
+        rpc, "fixture-model", history_digest(body["messages"]), digest([]), "low", "fixture-thread"
     )
     await rpc.events.put(
         {
@@ -157,3 +157,20 @@ async def test_tool_result_resumes_the_same_rpc_and_all_usage_is_retained():
     assert final["usage"]["output_tokens"] == 50
     assert final["content"][0]["text"] == "FILE_RESULT"
     assert bridge.pending == {}
+
+
+def test_claude_stream_block_splitting_and_cache_annotations_keep_history_identity():
+    text = {"type": "text", "text": "Reading"}
+    tool = {
+        "type": "tool_use",
+        "id": "fixture-call",
+        "name": "Read",
+        "input": {"file_path": "fixture.txt"},
+    }
+    one = [{"role": "assistant", "content": [text, tool]}]
+    split = [
+        {"role": "assistant", "content": [text]},
+        {"role": "assistant", "content": [{**tool, "cache_control": {"type": "ephemeral"}}]},
+    ]
+    assert history_digest(one) == history_digest(split)
+    assert history_digest(one) != history_digest([{"role": "assistant", "content": [text]}])

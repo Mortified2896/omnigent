@@ -103,12 +103,37 @@ def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def semantic(value):
+    if isinstance(value, dict):
+        return {k: semantic(v) for k, v in value.items() if k != "cache_control"}
+    if isinstance(value, list):
+        return [semantic(v) for v in value]
+    return value
+
+
+def history_digest(messages: list) -> str:
+    # Claude splits streamed text and tool blocks into adjacent assistant
+    # messages, and adds cache annotations when replaying them.
+    normalized = []
+    for message in messages:
+        content = message.get("content", [])
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+        row = {"role": message["role"], "content": semantic(content)}
+        if normalized and normalized[-1]["role"] == row["role"]:
+            normalized[-1]["content"].extend(row["content"])
+        else:
+            normalized.append(row)
+    return digest(normalized)
+
+
 class Bridge:
     def __init__(self, config: dict):
         self.config = config
         self.pending: dict[str, Turn] = {}
         self.lock = asyncio.Lock()
         self.usage_audit: list[dict] = []
+        self.resume_diagnostic: dict = {}
 
     def key(self) -> str:
         result = subprocess.run(
@@ -175,6 +200,7 @@ class Bridge:
                     ),
                     "models": rows,
                     "usage_audit": self.usage_audit[-32:],
+                    "resume_diagnostic": self.resume_diagnostic,
                 }
             )
         finally:
@@ -194,22 +220,25 @@ class Bridge:
         blocks = messages[-1].get("content", []) if messages else []
         blocks = blocks if isinstance(blocks, list) else []
         results = [b for b in blocks if b.get("type") == "tool_result"]
-        tools = digest(body.get("tools", []))
+        tools = digest(semantic(body.get("tools", [])))
         effort = body.get("output_config", {}).get("effort") or "medium"
         if results:
-            turn = self.pending.pop(results[0].get("tool_use_id"), None)
-            if (
-                turn is None
-                or len(results) != 1
-                or turn.model != body["model"]
-                or turn.tools != tools
-                or turn.effort != effort
-                or turn.history != digest(messages[:-1])
-            ):
-                if turn:
-                    await self.discard(turn)
+            call_id = results[0].get("tool_use_id")
+            turn = self.pending.get(call_id)
+            checks = {
+                "pending": turn is not None,
+                "single_result": len(results) == 1,
+                "model": turn is not None and turn.model == body["model"],
+                "effort": turn is not None
+                and turn.effort == (body.get("output_config", {}).get("effort") or turn.effort),
+                "history": turn is not None and turn.history == history_digest(messages[:-1]),
+            }
+            self.resume_diagnostic = checks
+            if not all(checks.values()):
                 raise ValueError("Tool result does not match the pending Codex turn")
-            turn.history = digest(messages)
+            assert turn is not None
+            self.pending.pop(call_id)
+            turn.history = history_digest(messages)
             await turn.rpc.ws.send(
                 json.dumps(
                     {
@@ -262,7 +291,7 @@ class Bridge:
                     {"system": body.get("system", []), "messages": messages}, ensure_ascii=False
                 )
             )
-            turn = Turn(rpc, body["model"], digest(messages), tools, effort, thread)
+            turn = Turn(rpc, body["model"], history_digest(messages), tools, effort, thread)
             await rpc.request(
                 "turn/start",
                 {
@@ -303,7 +332,7 @@ class Bridge:
                     }
                 )
                 turn.pending = {**params, "id": row["id"]}
-                turn.history = digest(
+                turn.history = history_digest(
                     [*body.get("messages", []), {"role": "assistant", "content": content}]
                 )
                 turn.touched = time.monotonic()
