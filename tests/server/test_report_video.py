@@ -86,7 +86,7 @@ async def test_image_search_rejects_untrusted_hosts_and_nonreusable_licenses():
             json={
                 "query": {
                     "pages": {
-                        "1": page("https://upload.wikimedia.org/portrait.jpg"),
+                        "1": page("https://thumb.wikimedia.org/portrait.jpg"),
                         "2": page("https://localhost/private"),
                         "3": page("https://upload.wikimedia.org:bad/file"),
                         "4": page(
@@ -111,7 +111,7 @@ async def test_image_search_rejects_untrusted_hosts_and_nonreusable_licenses():
         )
     ) as client:
         with pytest.raises(ValueError, match="match"):
-            await download_commons_image(client, "https://upload.wikimedia.org/image.jpg")
+            await download_commons_image(client, "https://thumb.wikimedia.org/image.jpg")
 
 
 def test_finisher_muxes_original_audio_with_fractional_duration(tmp_path):

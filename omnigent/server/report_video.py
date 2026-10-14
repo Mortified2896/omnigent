@@ -207,7 +207,10 @@ async def search_commons(client: httpx.AsyncClient, query: str) -> list[dict[str
         source = info.get("descriptionurl", "")
         if (
             not re.match(r"^(Public domain|CC0|CC BY(?:-SA)?\s)", license_name)
-            or not _commons_url(thumbnail, "upload.wikimedia.org")
+            or not any(
+                _commons_url(thumbnail, host)
+                for host in ("upload.wikimedia.org", "thumb.wikimedia.org")
+            )
             or not _commons_url(source, "commons.wikimedia.org")
             or info.get("thumbmime", info.get("mime"))
             not in {"image/jpeg", "image/png", "image/webp"}
@@ -227,7 +230,9 @@ async def search_commons(client: httpx.AsyncClient, query: str) -> list[dict[str
 
 
 async def download_commons_image(client: httpx.AsyncClient, url: str) -> tuple[bytes, str]:
-    if not _commons_url(url, "upload.wikimedia.org"):
+    if not any(
+        _commons_url(url, host) for host in ("upload.wikimedia.org", "thumb.wikimedia.org")
+    ):
         raise ValueError("Only verified Commons thumbnails can be fetched")
     async with client.stream(
         "GET", url, headers={"User-Agent": _USER_AGENT}, follow_redirects=False
