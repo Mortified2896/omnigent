@@ -1294,6 +1294,8 @@ async def _prepare_codex_terminal(
                 event_client = await preload_codex_thread_for_resume(
                     codex_ws_url,
                     thread_id,
+                    model_provider=codex_session_meta_model_provider(_codex_launch),
+                    model=_codex_launch.model,
                     terminal_launch_args=codex_args,
                     cwd=Path.cwd(),
                     retain_client=codex_remote_resume_omits_permission_args(

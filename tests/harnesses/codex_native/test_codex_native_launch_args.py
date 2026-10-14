@@ -329,6 +329,33 @@ def test_profile_paths_keep_source_origin_and_symbolic_permission_keys(tmp_path:
     assert (source / "strict.config.toml").read_text() == original
 
 
+@pytest.mark.parametrize(
+    "provider,model", [("openai", "direct-checkpoint"), ("gateway", "gateway/checkpoint")]
+)
+async def test_resume_uses_resolved_provider_and_model(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str
+) -> None:
+    """A cold thread must not restore its stale gateway credential binding."""
+    client = AsyncMock()
+    monkeypatch.setattr(app_server, "client_for_transport", lambda *args, **kwargs: client)
+    await app_server.preload_codex_thread_for_resume(
+        "ws://127.0.0.1:9876",
+        "thread-test",
+        model_provider=provider,
+        model=model,
+    )
+    client.request.assert_awaited_once_with(
+        "thread/resume",
+        {
+            "threadId": "thread-test",
+            "excludeTurns": True,
+            "modelProvider": provider,
+            "model": model,
+            "approvalsReviewer": "auto_review",
+        },
+    )
+
+
 async def test_remote_resume_add_dir_preserves_configured_roots(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

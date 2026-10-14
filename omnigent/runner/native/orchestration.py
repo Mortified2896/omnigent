@@ -5780,6 +5780,8 @@ async def _auto_create_codex_terminal(
             retained_resume_client = await preload_codex_thread_for_resume(
                 codex_ws_url,
                 launch_config.external_session_id,
+                model_provider=codex_session_meta_model_provider(_codex_launch),
+                model=_codex_launch.model,
                 terminal_launch_args=launch_config.terminal_launch_args,
                 cwd=Path(workspace),
                 retain_client=codex_remote_resume_omits_permission_args(

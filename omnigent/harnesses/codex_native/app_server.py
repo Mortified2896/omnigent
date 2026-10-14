@@ -4992,6 +4992,8 @@ async def preload_codex_thread_for_resume(
     terminal_launch_args: Sequence[str] | None = None,
     retain_client: bool = False,
     cwd: Path | None = None,
+    model_provider: str | None = None,
+    model: str | None = None,
 ) -> CodexAppServerClient | None:
     """
     Load an existing Codex thread into a freshly started app-server.
@@ -5010,6 +5012,11 @@ async def preload_codex_thread_for_resume(
     :param retain_client: Keep the thread subscribed through terminal attachment.
         The caller must pass the returned client to the forwarder and close it.
     :param cwd: Session working directory for resolving additional writable roots.
+    :param model_provider: Explicit resolved provider for this launch. Codex's
+        thread store otherwise restores the old provider even when startup
+        config and the refreshed rollout select a different transport.
+    :param model: Resolved wire model for the resumed route, which may use a
+        different spelling from the previously stored gateway model.
     :returns: The subscribed client when retained, otherwise None.
     :raises RuntimeError: If the app-server rejects the resume.
     """
@@ -5021,6 +5028,10 @@ async def preload_codex_thread_for_resume(
     try:
         await client.connect()
         params = _codex_resume_permission_params(terminal_launch_args)
+        if model_provider is not None:
+            params["modelProvider"] = model_provider
+        if model is not None:
+            params["model"] = model
         args = canonical_codex_launch_args(terminal_launch_args or ())
         additional_roots: list[str] = []
         effective_cwd = cwd or Path.cwd()
