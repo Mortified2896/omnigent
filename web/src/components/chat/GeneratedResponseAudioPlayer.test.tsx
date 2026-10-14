@@ -421,9 +421,73 @@ describe("GeneratedResponseAudioPlayer", () => {
     const player = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
     expect(player).not.toHaveAttribute("controls");
     expect(screen.queryByText("Audio unavailable")).not.toBeInTheDocument();
+    expect(await screen.findByText("Estimated highlighting")).toHaveAttribute(
+      "title",
+      expect.stringContaining("may drift"),
+    );
     player.currentTime = 1.5;
     fireEvent.seeking(player);
     expect(currentHighlightText()).toEqual(["world"]);
+  });
+
+  it("tracks the audio clock between media events at 2× and stops frames on pause, end and unmount", async () => {
+    installHighlightApi();
+    const saved = timings(["Hello", "world", "again"]);
+    saved.units = saved.units.map((unit, index) => ({
+      ...unit,
+      start_seconds: index * 0.4,
+      end_seconds: (index + 1) * 0.4 + 0.1,
+    }));
+    authenticatedFetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.endsWith("/timings")
+          ? response(saved)
+          : response({ data: [readyAudioRow("response-1")] }),
+      ),
+    );
+    const view = renderPlayer("response-1", "Hello world again.");
+    const audio = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    await screen.findByText("Word timings");
+    expect(screen.queryByText("Estimated highlighting")).not.toBeInTheDocument();
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++nextId, callback);
+      return nextId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    const tick = () =>
+      act(() => {
+        const [id, callback] = frames.entries().next().value!;
+        frames.delete(id);
+        callback(performance.now());
+      });
+    Object.defineProperty(audio, "paused", { configurable: true, writable: true, value: false });
+    fireEvent.change(screen.getByLabelText("Playback speed"), { target: { value: "2" } });
+    audio.currentTime = 0.1;
+    fireEvent.play(audio);
+    expect(currentHighlightText()).toEqual(["Hello"]);
+    audio.currentTime = 0.45;
+    tick();
+    // The overlapping second word wins at its start; no second speed multiplier.
+    expect(currentHighlightText()).toEqual(["world"]);
+    audio.currentTime = 0.9;
+    tick();
+    expect(currentHighlightText()).toEqual(["again"]);
+    expect(frames.size).toBe(1);
+    fireEvent.pause(audio);
+    expect(frames.size).toBe(0);
+    expect(currentHighlightText()).toEqual(["again"]);
+    fireEvent.play(audio);
+    expect(frames.size).toBe(1);
+    fireEvent.ended(audio);
+    expect(frames.size).toBe(0);
+    expect(currentHighlightText()).toEqual([]);
+    fireEvent.play(audio);
+    expect(frames.size).toBe(1);
+    view.unmount();
+    expect(frames.size).toBe(0);
+    expect(currentHighlightText()).toEqual([]);
   });
 
   it("follows playback by default, can opt out, and never scrolls paused seeking", async () => {

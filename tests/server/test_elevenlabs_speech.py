@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import json
+import re
 import wave
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -33,7 +34,10 @@ def _response(text: str) -> dict[str, object]:
     }
 
 
-def test_quality_model_and_timings_remain_exact_across_chunks(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("overlapping_words", [False, True])
+def test_quality_model_and_timings_remain_exact_across_chunks(
+    monkeypatch: pytest.MonkeyPatch, overlapping_words: bool
+):
     monkeypatch.setattr("omnigent.server.elevenlabs_speech._CHUNK_LIMIT", 12)
     requests = []
 
@@ -47,7 +51,14 @@ def test_quality_model_and_timings_remain_exact_across_chunks(monkeypatch: pytes
         assert request.url.host == "api.elevenlabs.io"
         assert request.url.path == "/v1/text-to-dialogue/with-timestamps"
         assert body["inputs"][0]["voice_id"] == "voice123"
-        return httpx.Response(200, json=_response(body["inputs"][0]["text"]))
+        text = body["inputs"][0]["text"]
+        data = _response(text)
+        if overlapping_words:
+            first, second = list(re.finditer(r"\S+", text))[:2]
+            data["alignment"]["character_end_times_seconds"][first.end() - 1] = (
+                data["alignment"]["character_start_times_seconds"][second.start()] + 0.04
+            )
+        return httpx.Response(200, json=data)
 
     narration = "First news. Next news. Last news."
     progress = []
@@ -80,6 +91,8 @@ def test_quality_model_and_timings_remain_exact_across_chunks(monkeypatch: pytes
         timings, audio=audio, narration=narration, expected_duration_seconds=duration
     )
     assert [unit["text"] for unit in sidecar["units"]] == narration.split()
+    if overlapping_words:
+        assert sidecar["units"][0]["end_seconds"] > sidecar["units"][1]["start_seconds"]
 
 
 @pytest.mark.parametrize("status", [401, 429, 503])

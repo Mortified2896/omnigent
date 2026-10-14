@@ -82,6 +82,7 @@ async function readGeneratedAudioTimings(
 ): Promise<GeneratedAudioTimingsWire> {
   const response = await authenticatedFetch(
     `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/timings`,
+    { priority: "high" },
   );
   if (!response.ok) throw new Error("Generated audio timings are unavailable");
   return (await response.json()) as GeneratedAudioTimingsWire;
@@ -234,6 +235,7 @@ export function GeneratedResponseAudioPlayer({
     let rangeByUnit = new Map<number, Range>();
     const owner = `${sessionId}:${responseId}`;
     let lastUnitIndex = -2;
+    let playbackFrame: number | null = null;
     clearReadAlongHighlight(owner);
 
     const updateHighlight = (force = false) => {
@@ -244,12 +246,28 @@ export function GeneratedResponseAudioPlayer({
       setReadAlongHighlight(owner, range);
       if (followText && !audio.paused && range) followReadAlongRange(range);
     };
-    const handlePlay = () => updateHighlight(true);
+    const stopPlaybackFrames = () => {
+      if (playbackFrame !== null) cancelAnimationFrame(playbackFrame);
+      playbackFrame = null;
+    };
+    const playbackTick = () => {
+      playbackFrame = null;
+      if (audio.paused || audio.ended) return;
+      // currentTime is already in the recording's timeline at every speed.
+      // Media timeupdate events alone can skip several words at 2×.
+      updateHighlight();
+      playbackFrame = requestAnimationFrame(playbackTick);
+    };
+    const handlePlay = () => {
+      updateHighlight(true);
+      if (playbackFrame === null) playbackFrame = requestAnimationFrame(playbackTick);
+    };
     const handleTimeUpdate = () => {
       if (!audio.paused) updateHighlight();
     };
     const handleSeeking = () => updateHighlight(true);
     const handleEnded = () => {
+      stopPlaybackFrames();
       lastUnitIndex = -2;
       clearReadAlongHighlight(owner);
     };
@@ -287,17 +305,20 @@ export function GeneratedResponseAudioPlayer({
     observer.observe(bubble, { childList: true, characterData: true, subtree: true });
 
     audio.addEventListener("play", handlePlay);
+    audio.addEventListener("pause", stopPlaybackFrames);
     audio.addEventListener("loadedmetadata", handleMetadata);
     audio.addEventListener("timeupdate", handleTimeUpdate);
     audio.addEventListener("seeking", handleSeeking);
     audio.addEventListener("seeked", handleSeeking);
     audio.addEventListener("ended", handleEnded);
-    if (!audio.paused) updateHighlight(true);
+    if (!audio.paused) handlePlay();
 
     return () => {
       observer.disconnect();
+      stopPlaybackFrames();
       if (rebuildFrame !== null) cancelAnimationFrame(rebuildFrame);
       audio.removeEventListener("play", handlePlay);
+      audio.removeEventListener("pause", stopPlaybackFrames);
       audio.removeEventListener("loadedmetadata", handleMetadata);
       audio.removeEventListener("timeupdate", handleTimeUpdate);
       audio.removeEventListener("seeking", handleSeeking);
@@ -431,7 +452,23 @@ export function GeneratedResponseAudioPlayer({
       </div>
       <div className="order-first flex w-full min-w-0 flex-col gap-1 sm:order-none sm:w-auto sm:flex-1">
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="truncate font-medium">Listen along</span>
+          <div className="min-w-0">
+            <span className="font-medium">Listen along</span>
+            <p
+              className="text-[11px] text-muted-foreground"
+              title={
+                timingsQuery.data?.units?.length
+                  ? "Using saved speech timings for this recording."
+                  : "Saved word timings are unavailable. Highlighting is estimated and may drift from the speech."
+              }
+            >
+              {timingsQuery.isPending
+                ? "Loading word timings…"
+                : timingsQuery.data?.units?.length
+                  ? "Word timings"
+                  : "Estimated highlighting"}
+            </p>
+          </div>
           <span className="whitespace-nowrap text-muted-foreground tabular-nums">
             {clock(position)} / {clock(duration)}
           </span>

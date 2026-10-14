@@ -48,7 +48,13 @@ punctuation tokens such as GPT-5.5. This prevents narrated but collapsed work
 notes from greedily consuming words in the final answer. DOM changes from lazy
 Markdown rendering or expanding work notes rebuild the ranges, coalesced to a
 single animation frame. Playback itself uses binary timestamp lookup, without
-React updates per frame. Alignment is bounded to 16 million cells (32 MB);
+React updates per frame. While playing, the highlight refreshes on animation
+frames using the audio element's `currentTime`, which stays in the original
+recording timeline at every playback speed. Media events remain a fallback for
+background tabs and paused seeking. Pause, end, and unmount cancel the frame loop.
+The controls distinguish saved **Word timings** from **Estimated highlighting**;
+missing or invalid sidecars must never imply precise synchronization.
+Alignment is bounded to 16 million cells (32 MB);
 excessively large inputs retain audio without highlighting.
 
 ## September 26 iPhone investigation
@@ -102,6 +108,12 @@ over 2,000 characters is split at a sentence or word boundary; the exact text
 and timing offsets are preserved across chunks. Provider failures are saved as
 short error codes without response bodies or credentials. The written report
 remains available when audio fails.
+
+Word intervals may overlap; their start timestamps must remain ordered. The
+validator preserves such intervals, and the player chooses the most recently
+started word. Hash, narration-span, positive-interval, and audio-bound checks
+still reject stale or corrupt metadata. Previously rejected sidecars were not
+saved, so this change alone cannot restore their original timings.
 
 The direct ElevenLabs path does not depend on `OMNIGENT_TTS_URL` or the RTX
 speech worker. Existing recordings remain unchanged. Generating speech sends

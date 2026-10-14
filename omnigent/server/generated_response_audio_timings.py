@@ -73,7 +73,6 @@ def validate_timing_sidecar(
     if not isinstance(units, list) or not units or len(units) > _MAX_UNITS:
         raise ValueError("timing sidecar has an invalid unit list")
     previous_start = -1.0
-    previous_end = -1.0
     previous_narration_end = -1
     validated_units: list[dict[str, Any]] = []
     for unit in units:
@@ -115,12 +114,14 @@ def validate_timing_sidecar(
             or start < 0
             or end <= start
             or end > duration + 0.025
-            or start < previous_start
-            or start < previous_end - 0.025
         ):
-            raise ValueError("timing timestamps are not monotonic or exceed the audio")
+            raise ValueError("timing timestamps have invalid intervals or exceed the audio")
+        # Character alignments can yield overlapping word intervals. Playback
+        # selects the latest word start, so overlap is valid; reordered starts
+        # would break its binary search. Preserve the provider's timestamps.
+        if start < previous_start:
+            raise ValueError("timing starts are not monotonic")
         previous_start = start
-        previous_end = end
         previous_narration_end = narration_end
         validated_units.append(
             {

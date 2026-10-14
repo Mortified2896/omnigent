@@ -72,9 +72,14 @@ def test_validates_pair_hashes_units_and_sidecar_key() -> None:
         (lambda data: data.update(narration_sha256="0" * 64), "different narration"),
         (lambda data: data.update(duration_seconds=float("nan")), "duration"),
         (
-            lambda data: data["units"][1].update(start_seconds=0.02),
+            lambda data: (
+                data["units"][0].update(start_seconds=0.01),
+                data["units"][1].update(start_seconds=0.005),
+            ),
             "monotonic",
         ),
+        (lambda data: data["units"][1].update(end_seconds=0.2), "exceed the audio"),
+        (lambda data: data["units"][0].update(end_seconds=0), "invalid intervals"),
         (
             lambda data: data["units"][1].update(narration_start=0, narration_end=5),
             "narration positions",
@@ -106,3 +111,15 @@ def test_rejects_invalid_json_and_wrong_narration_span() -> None:
             audio=audio,
             narration="Hello world.",
         )
+
+
+def test_preserves_overlapping_provider_word_intervals() -> None:
+    audio = _wav_bytes()
+    sidecar = _sidecar(audio)
+    sidecar["engine"] = "elevenlabs/eleven_v4"
+    sidecar["units"][0]["end_seconds"] = 0.09
+    # A 40 ms overlap used to discard the entire recording's timings.
+    result = validate_timing_sidecar(
+        json.dumps(sidecar).encode(), audio=audio, narration="Hello world."
+    )
+    assert result["units"] == sidecar["units"]
