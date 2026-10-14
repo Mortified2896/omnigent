@@ -174,3 +174,33 @@ def test_claude_stream_block_splitting_and_cache_annotations_keep_history_identi
     ]
     assert history_digest(one) == history_digest(split)
     assert history_digest(one) != history_digest([{"role": "assistant", "content": [text]}])
+
+
+@pytest.mark.asyncio
+async def test_claude_mcp_tool_names_are_translated_and_restored(monkeypatch):
+    requests = []
+
+    async def request(method, params):
+        requests.append((method, params))
+        return {"thread": {"id": "fixture-thread"}}
+
+    rpc = SimpleNamespace(request=request, events=asyncio.Queue())
+    bridge = Bridge({"cwd": "/fixture"})
+
+    async def connect():
+        return rpc
+
+    monkeypatch.setattr(bridge, "connect", connect)
+    body = {
+        "model": "fixture-model",
+        "messages": [{"role": "user", "content": "Read the fixture"}],
+        "tools": [{"name": "mcp__fixture__Read", "input_schema": {"type": "object"}}],
+    }
+    turn = await bridge.start(body)
+    name = requests[0][1]["dynamicTools"][0]["name"]
+    assert name != "mcp__fixture__Read" and not name.startswith("mcp__")
+    await rpc.events.put(
+        {"method": "item/tool/call", "id": 1, "params": {"tool": name, "arguments": {}}}
+    )
+    response = await bridge.response(body, turn)
+    assert response["content"][0]["name"] == "mcp__fixture__Read"

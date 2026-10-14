@@ -117,6 +117,7 @@ class Turn:
     tools: str
     effort: str
     thread: str
+    tool_names: dict[str, str] = field(default_factory=dict)
     total: dict = field(default_factory=dict)
     recorded: dict = field(default_factory=dict)
     pending: dict = field(default_factory=dict)
@@ -287,6 +288,12 @@ class Bridge:
             raise ValueError("Too many pending Claude tool calls")
         rpc = await self.connect()
         try:
+            # Codex reserves MCP-style names. Use a private dynamic-tool
+            # vocabulary, restoring Claude's names before it executes them.
+            tool_names = {
+                f"claude_tool_{index}": tool["name"]
+                for index, tool in enumerate(body.get("tools", []))
+            }
             result = await rpc.request(
                 "thread/start",
                 {
@@ -296,13 +303,16 @@ class Bridge:
                     "config": {"shell_tool": False},
                     "dynamicTools": [
                         {
-                            "name": t["name"],
-                            "description": t.get("description", ""),
+                            "name": f"claude_tool_{index}",
+                            "description": "Claude Code tool: "
+                            + t["name"]
+                            + "\n"
+                            + t.get("description", ""),
                             "inputSchema": t.get(
                                 "input_schema", {"type": "object", "properties": {}}
                             ),
                         }
-                        for t in body.get("tools", [])
+                        for index, t in enumerate(body.get("tools", []))
                     ],
                 },
             )
@@ -314,10 +324,16 @@ class Bridge:
                 "for actions. Do not use Codex built-in tools. Follow these system "
                 "instructions and conversation:\n"
                 + json.dumps(
-                    {"system": body.get("system", []), "messages": messages}, ensure_ascii=False
+                    {
+                        "system": body.get("system", []),
+                        "messages": messages,
+                        "tool_names": tool_names,
+                    },
+                    ensure_ascii=False,
                 )
             )
             turn = Turn(rpc, body["model"], history_digest(messages), tools, effort, thread)
+            turn.tool_names = tool_names
             await rpc.request(
                 "turn/start",
                 {
@@ -353,7 +369,7 @@ class Bridge:
                     {
                         "type": "tool_use",
                         "id": call_id,
-                        "name": params["tool"],
+                        "name": turn.tool_names.get(params["tool"], params["tool"]),
                         "input": params.get("arguments", {}),
                     }
                 )
@@ -465,21 +481,9 @@ class Bridge:
                 self.last_error.update(
                     operation=error.operation, code=error.code, categories=error.categories
                 )
-                self.last_error["tools"] = [
-                    {
-                        "name": t.get("name"),
-                        "schema_keys": list((t.get("input_schema") or {}).keys()),
-                    }
-                    for t in body.get("tools", [])
-                    if isinstance(t, dict) and isinstance(t.get("input_schema"), dict)
-                ]
-            if str(error) in {
-                "Codex rejected initialize",
-                "Codex rejected thread/start",
-                "Codex rejected turn/start",
-            }:
-                self.last_error["operation"] = str(error).removeprefix("Codex rejected ")
-            effort = (body.get("output_config") or {}).get("effort")
+                self.last_error["tool_count"] = len(body.get("tools", []))
+            effort_config = body.get("output_config")
+            effort = effort_config.get("effort") if isinstance(effort_config, dict) else None
             if isinstance(effort, str) and re.fullmatch(r"[a-z]{1,16}", effort):
                 self.last_error["effort"] = effort
             model = body.get("model", "")
