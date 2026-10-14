@@ -95,6 +95,22 @@ def test_fork_drops_import_provenance_labels(
     assert IMPORT_EXTERNAL_SESSION_ID_LABEL_KEY not in fork.labels
 
 
+def test_fork_does_not_inherit_gateway_failure_notice(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    source = conversation_store.create_conversation()
+    notice = {
+        "omnigent.transport.fallback_from": "omniroute",
+        "omnigent.transport.fallback_reason": "connection_error",
+        "omnigent.transport.fallback_at": "1700000000",
+    }
+    conversation_store.set_labels(source.id, {**notice, "kept": "yes"})
+    fork = conversation_store.fork_conversation(source.id)
+    assert fork.labels["kept"] == "yes"
+    assert not notice.keys() & fork.labels.keys()
+    assert conversation_store.get_conversation(source.id).labels.items() >= notice.items()
+
+
 def test_fork_drops_sandbox_repo_label(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:

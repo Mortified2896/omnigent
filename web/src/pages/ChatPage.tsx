@@ -296,6 +296,7 @@ import { GoalDialog, CommandGoalDialog, GoalStatusPill, useGoalState } from "@/c
 import { useIsCoarsePointer } from "@/hooks/useIsCoarsePointer";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { ConnectionIndicator } from "./ChatIndicators";
+import { DirectFallbackNotice } from "@/components/chat/DirectFallbackNotice";
 import { Transcript } from "@/components/chat/Transcript";
 import {
   readSessionAdvisorEnabled,
@@ -1886,6 +1887,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
         className={cn("absolute inset-0 flex flex-col", !isShown && "invisible opacity-0")}
         aria-hidden={!isShown}
       >
+        {isShown && <DirectFallbackNotice sessionId={conversationId} />}
         <MainTerminalView
           conversationId={entry.conversationId}
           initialTerminalKey={isActive ? terminalFirst?.terminalViewKey : null}
@@ -1912,6 +1914,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
       {terminalSurfaces}
       {!showTerminal && (
         <GeneratedAudioDockProvider>
+          <DirectFallbackNotice sessionId={conversationId} />
           {/* The scrolling transcript column owns every streaming-hot store
           subscription and the bubble pipeline, so an SSE frame re-renders it
           alone — this surface's composer and chrome below bail out. */}

@@ -1118,6 +1118,9 @@ def test_provider_grouped_round_uses_typed_pre_dispatch_fallback(db_uri) -> None
         assert len(launches) == 2
         assert launches[0].labels["omnigent.access_lane"] == "omniroute"
         assert launches[1].labels["omnigent.access_lane"] == "glm-direct"
+        assert launches[1].labels["omnigent.transport.fallback_from"] == "omniroute"
+        assert launches[1].labels["omnigent.transport.fallback_reason"] == "proxy_connect_failed"
+        assert float(launches[1].labels["omnigent.transport.fallback_at"]) > 0
         attempts = confirmed.json()["transport_attempts"]
         assert [attempt["status"] for attempt in attempts] == [
             "dispatch_started",
@@ -1906,6 +1909,10 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
         ]:
             assert store.conversation.labels[key] == original_labels[key]
         assert store.conversation.labels["omnigent.advisor.fallback_pending"] == "0"
+        assert store.conversation.labels["omnigent.transport.fallback_from"] == "omniroute"
+        assert (
+            store.conversation.labels["omnigent.transport.fallback_reason"] == "codex_turn_error"
+        )
         ready.assert_awaited_once()
         again = client.post(
             "/v1/model-advisor/sessions/conv_new/recover-transport", headers=JSON_ALICE, json={}

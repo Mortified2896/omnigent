@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import secrets
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -80,6 +81,15 @@ from omnigent.stores.conversation_store import (
 from omnigent.stores.host_store import HostStore
 
 _logger = logging.getLogger("omnigent.server.model_advisor")
+
+
+def _direct_fallback_notice_labels(reason: str) -> dict[str, str]:
+    """Keep fallback provenance visible after recovery and later replies."""
+    return {
+        "omnigent.transport.fallback_from": "omniroute",
+        "omnigent.transport.fallback_reason": reason,
+        "omnigent.transport.fallback_at": str(time.time()),
+    }
 
 
 def _set_observational_attributes(span: Any, attributes: dict[str, str | int]) -> None:
@@ -1838,10 +1848,14 @@ class ModelAdvisorService:
             )
             return continue_session_id, plan.primary
 
-        def body_for(route: QualifiedRoute) -> SessionCreateRequest:
+        def body_for(
+            route: QualifiedRoute, *, fallback_reason: str | None = None
+        ) -> SessionCreateRequest:
             from omnigent.model_advisor_attachments import answer_attachment_blocks
 
             labels = labels_for(route)
+            if fallback_reason is not None:
+                labels.update(_direct_fallback_notice_labels(fallback_reason))
             return SessionCreateRequest(
                 agent_id=launch["agent_id"],
                 harness_override=route.choice.harness,
@@ -1972,7 +1986,7 @@ class ModelAdvisorService:
                 ) from exc
             try:
                 fallback_session = await self._session_launcher(
-                    body_for(current_fallback),
+                    body_for(current_fallback, fallback_reason=exc.cause),
                     user_id=user_id,
                     request=request,
                 )
@@ -2116,6 +2130,7 @@ class ModelAdvisorService:
                 409, "The direct Codex fallback is no longer available for this account"
             )
         updated_labels = {
+            **_direct_fallback_notice_labels(labels["omnigent.last_task_error_code"]),
             **encode_transport_binding_label(
                 ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
                 json.dumps(qualified.to_payload(), sort_keys=True, separators=(",", ":")),

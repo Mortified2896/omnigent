@@ -243,6 +243,10 @@ _SANDBOX_REPO_LABEL_KEY = "omnigent.sandbox.repo"
 _FORK_ONLY_DROPPED_LABEL_KEYS = IMPORT_PROVENANCE_LABEL_KEYS | {
     ARCHIVED_AT_LABEL_KEY,
     _SANDBOX_REPO_LABEL_KEY,
+    # A fresh chat did not experience its source chat's gateway failure.
+    "omnigent.transport.fallback_from",
+    "omnigent.transport.fallback_reason",
+    "omnigent.transport.fallback_at",
 }
 
 
