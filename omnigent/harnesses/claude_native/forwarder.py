@@ -2904,6 +2904,10 @@ async def _forward_session_cost(
         mutated in place.
     :returns: None.
     """
+    # A CLI-owned Codex subscription exposes token usage, not a billed
+    # dollar amount. Claude's API price estimate is not subscription spend.
+    if dedupe.usage_provider == "openai":
+        return
     if time.monotonic() < dedupe.cost_retry_not_before:
         return
     status_state = await asyncio.to_thread(read_claude_context_state, bridge_dir)

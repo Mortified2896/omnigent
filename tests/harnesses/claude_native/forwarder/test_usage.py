@@ -58,6 +58,30 @@ def test_usage_from_status_state_surfaces_cumulative_cost() -> None:
     assert result["output_tokens"] == 50
 
 
+@pytest.mark.asyncio
+async def test_codex_subscription_does_not_publish_claude_api_price_estimates(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(forwarder, "read_claude_context_state", lambda _: {"total_cost_usd": 0.42})
+    posts = []
+
+    def handle(request):
+        posts.append(request)
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        await forwarder._forward_session_cost(
+            client=client,
+            session_id="fixture-subscription",
+            bridge_dir=tmp_path,
+            parent_transcript_path=tmp_path / "fixture.jsonl",
+            subagent_state=forwarder.SubagentForwardState(subagents={}),
+            dedupe=forwarder._ForwardDedupeState(usage_provider="openai"),
+            cost_cache={},
+        )
+    assert posts == []
+
+
 def test_usage_from_status_state_omits_cost_when_absent() -> None:
     """
     Without ``total_cost_usd`` in state, no ``cumulative_cost_usd`` is emitted.
