@@ -41,6 +41,7 @@ import {
   activeChoiceIds,
   emptyProviderPreferences,
   effectiveOptions,
+  providerSelection,
   type LogicalOption,
   type ProviderPreferences,
 } from "@/model-advisor/providerPreferences";
@@ -257,7 +258,10 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   // Shared model presentation: the same row/group/route vocabulary the primary
   // picker renders, adapted to the advisor's logical (one row per checkpoint,
   // routes shown per row) persistence model.
-  const advisorRows = useMemo(() => advisorModelRows(options), [options]);
+  const advisorRows = useMemo(
+    () => advisorModelRows(options.filter((option) => option.provider !== "anthropic")),
+    [options],
+  );
   const advisorOptions = useMemo<ModelPickerOption[]>(() => {
     const result: ModelPickerOption[] = advisorRows.map((row) => ({
       id: row.modelId,
@@ -958,12 +962,14 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
   const approvalRequired = Boolean(
     review?.assigned_arm === "advisor" &&
     assigned &&
-    (approvalPreferences?.providers[assigned.provider].approval_choice_ids?.includes(
-      assigned.choice_id,
-    ) ||
-      approvalPreferences?.providers[assigned.provider].approval_model_ids?.includes(
-        assigned.model_id,
-      )),
+    ((approvalPreferences
+      ? providerSelection(approvalPreferences, assigned.provider).approval_choice_ids
+      : undefined
+    )?.includes(assigned.choice_id) ||
+      (approvalPreferences
+        ? providerSelection(approvalPreferences, assigned.provider).approval_model_ids
+        : undefined
+      )?.includes(assigned.model_id)),
   );
   const launchNeedsApproval = requireConfirmation || approvalRequired;
   const awaitingLaunch =

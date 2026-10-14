@@ -240,3 +240,38 @@ def test_openrouter_reads_dedicated_stored_key(monkeypatch):
         lambda name: "fixture-key" if name == "jev-openrouter" else None,
     )
     assert _openrouter_key() == "fixture-key"
+
+
+def test_jev_selects_concrete_harness_model_pairs_and_preserves_old_preferences():
+    from omnigent.model_advisor_provider_policy import LogicalChoice, ProviderSelection
+
+    claude = LogicalChoice("anthropic", "claude-test", "high")
+    preferences = replace(
+        PREFERENCES,
+        advisor_model_mode="jev",
+        anthropic=ProviderSelection(
+            enabled=True,
+            selected_choice_ids=(claude.choice_id,),
+            transport_preference="direct_only",
+        ),
+    )
+    assert "anthropic" not in PREFERENCES.to_payload()["providers"]
+    assert ProviderPreferences.from_payload(preferences.to_payload()) == preferences
+    frozen = freeze_logical_round(
+        owner_id="owner",
+        host_id="host",
+        round_id="harness-round",
+        settings_revision="settings",
+        catalog_revision="catalog",
+        task="Inspect this project.",
+        preferences=preferences,
+        catalog=(*CATALOG, claude),
+        routes_by_choice={},
+        human_choice_id=OPENAI_LOW.choice_id,
+    )
+    assert LogicalFrozenRound.from_payload(frozen.to_payload()) == frozen
+    body = build_jev_request(frozen.advisor_input())
+    criteria = body["questions"]["route"]["criteria"]
+    assert "Harness: claude-native" in criteria[claude.choice_id]
+    assert "Harness: codex-native" in criteria[OPENAI_LOW.choice_id]
+    assert set(criteria) == {OPENAI_LOW.choice_id, GLM_HIGH.choice_id, claude.choice_id}

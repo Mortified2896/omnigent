@@ -12,6 +12,7 @@ import type { NativeModelOption } from "./types";
 /** Friendly transport label for a lane id, matching the host's stamping. */
 const LANE_LABELS: Readonly<Record<string, string>> = {
   omniroute: "OmniRoute",
+  "claude-direct": "Claude Code",
   "codex-direct": "Codex Subscription — Direct",
   "glm-direct": "Z.AI Direct",
 };
@@ -50,7 +51,9 @@ export function modelGroupLabel(option: NativeModelOption): string | null {
   if (!lane) return null;
   const laneLabelResolved = laneLabel(lane);
   const family = option.groupLabel;
-  return family && family !== laneLabelResolved ? `${family} · ${laneLabelResolved}` : laneLabelResolved;
+  return family && family !== laneLabelResolved
+    ? `${family} · ${laneLabelResolved}`
+    : laneLabelResolved;
 }
 
 /**

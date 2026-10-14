@@ -1677,6 +1677,7 @@ class _SessionUsageCoalescer:
         self._pending: dict[str, int] = {}
         self._last_posted: dict[str, int] = {}
         self._model: str | None = model
+        self._recorded_usage_snapshot: str | None = None
 
     def record(self, params: _JsonObject, model: str | None = None) -> None:
         """
@@ -1697,6 +1698,34 @@ class _SessionUsageCoalescer:
         if data is None:
             return
         self._pending.update(data)
+        # `total` is cumulative for the thread; only `last` describes the
+        # completed API call. Never export cumulative counters as additive
+        # GenAI usage (that would count the earlier calls again).
+        token_usage = params.get("tokenUsage")
+        last = token_usage.get("last") if isinstance(token_usage, dict) else None
+        if not isinstance(last, dict) or any(
+            type(last.get(key)) is not int or last[key] < 0
+            for key in ("inputTokens", "outputTokens")
+        ):
+            return
+        snapshot = json.dumps(token_usage, sort_keys=True, separators=(",", ":"))
+        if snapshot == self._recorded_usage_snapshot:
+            return
+        from omnigent.runtime import telemetry
+
+        usage = {"input_tokens": last["inputTokens"], "output_tokens": last["outputTokens"]}
+        cached = last.get("cachedInputTokens")
+        if type(cached) is int and 0 <= cached <= last["inputTokens"]:
+            usage["cache_read_input_tokens"] = cached
+        attributes = {"omnigent.harness": "codex-native", "gen_ai.operation.name": "chat"}
+        if self._model:
+            attributes["gen_ai.response.model"] = self._model
+        with (
+            telemetry.session_scope(self._session_id),
+            telemetry.span("codex_native.usage", attributes=attributes) as usage_span,
+        ):
+            telemetry.record_llm_usage(usage_span, usage)
+        self._recorded_usage_snapshot = snapshot
 
     async def flush(self) -> None:
         """

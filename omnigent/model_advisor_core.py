@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-AccessClass = Literal["chatgpt_plan", "glm_plan"]
+AccessClass = Literal["chatgpt_plan", "glm_plan", "claude_plan"]
 Arm = Literal["human", "advisor", "same"]
 
 ADVISOR_INSTRUCTIONS = (
@@ -74,7 +74,7 @@ class Candidate:
             _text(value, field)
             if value != value.strip() or any(ord(char) < 32 for char in value):
                 raise AdvisorContractError(f"Noncanonical {field}")
-        if self.access_class not in ("chatgpt_plan", "glm_plan"):
+        if self.access_class not in ("chatgpt_plan", "glm_plan", "claude_plan"):
             raise AdvisorContractError("Only ChatGPT-plan and GLM-plan lanes are in scope")
         for value in (self.model_id, self.reasoning_effort):
             if value.casefold() in {"auto", "default", "smart", ""}:

@@ -840,6 +840,16 @@ class TranscriptRecordItems:
 
 
 @dataclass(frozen=True)
+class ClaudeApiUsage:
+    """A native message's counters, independent of its text blocks."""
+
+    message_id: str
+    usage: dict[str, int]
+    model: str | None = None
+    response_id: str | None = None
+
+
+@dataclass(frozen=True)
 class TranscriptReadResult:
     """
     Result of reading Claude transcript JSONL records.
@@ -877,6 +887,7 @@ class TranscriptReadResult:
     latest_model: str | None = None
     latest_custom_title: str | None = None
     record_items: tuple[TranscriptRecordItems, ...] = ()
+    api_usage: tuple[ClaudeApiUsage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3152,6 +3163,7 @@ def read_transcript_items_since_with_position(
     latest_model: str | None = None
     latest_custom_title: str | None = None
     record_items: list[TranscriptRecordItems] = []
+    api_usage: dict[str, ClaudeApiUsage] = {}
     for record in read_result.records:
         parsed: list[ClaudeTranscriptItem] = []
         if record.text is None:
@@ -3191,6 +3203,10 @@ def read_transcript_items_since_with_position(
         model = _model_from_transcript_entry(entry)
         if model is not None:
             latest_model = model
+        message = entry.get("message")
+        message_id = message.get("id") if isinstance(message, dict) else None
+        if usage is not None and isinstance(message_id, str) and message_id:
+            api_usage[message_id] = ClaudeApiUsage(message_id, usage, model, active_response_id)
         custom_title = _custom_title_from_transcript_entry(entry)
         if custom_title is not None:
             latest_custom_title = custom_title
@@ -3218,6 +3234,7 @@ def read_transcript_items_since_with_position(
         latest_model=latest_model,
         latest_custom_title=latest_custom_title,
         record_items=tuple(record_items),
+        api_usage=tuple(api_usage.values()),
     )
 
 
@@ -3275,6 +3292,7 @@ def read_transcript_items_from_offset(
     latest_model: str | None = None
     latest_custom_title: str | None = None
     record_items: list[TranscriptRecordItems] = []
+    api_usage: dict[str, ClaudeApiUsage] = {}
     for record in read_result.records:
         parsed: list[ClaudeTranscriptItem] = []
         if record.text is None:
@@ -3318,6 +3336,10 @@ def read_transcript_items_from_offset(
         model = _model_from_transcript_entry(entry)
         if model is not None:
             latest_model = model
+        message = entry.get("message")
+        message_id = message.get("id") if isinstance(message, dict) else None
+        if usage is not None and isinstance(message_id, str) and message_id:
+            api_usage[message_id] = ClaudeApiUsage(message_id, usage, model, active_response_id)
         custom_title = _custom_title_from_transcript_entry(entry)
         if custom_title is not None:
             latest_custom_title = custom_title
@@ -3345,6 +3367,7 @@ def read_transcript_items_from_offset(
         latest_model=latest_model,
         latest_custom_title=latest_custom_title,
         record_items=tuple(record_items),
+        api_usage=tuple(api_usage.values()),
     )
 
 

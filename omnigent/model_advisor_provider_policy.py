@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass, replace
 from typing import Literal
 
-Provider = Literal["openai", "glm"]
+Provider = Literal["openai", "glm", "anthropic"]
 Transport = Literal["omniroute", "direct"]
 Preference = Literal["omniroute_preferred", "omniroute_only", "direct_only"]
 ExclusionReason = Literal[
@@ -22,7 +22,7 @@ ExclusionReason = Literal[
     "reasoning_not_selected",
     "unavailable_from_live_catalog",
 ]
-PROVIDERS: tuple[Provider, ...] = ("openai", "glm")
+PROVIDERS: tuple[Provider, ...] = ("openai", "glm", "anthropic")
 
 
 class ProviderPolicyError(ValueError):
@@ -57,7 +57,7 @@ class LogicalChoice:
 
     def __post_init__(self) -> None:
         if self.provider not in PROVIDERS:
-            raise ProviderPolicyError("Only OpenAI and GLM plan models are in scope")
+            raise ProviderPolicyError("Only OpenAI, GLM and Claude plan models are in scope")
         _text(self.model_id)
         _text(self.reasoning_effort)
         if self.model_id.lower().startswith(("auto/", "custom/")):
@@ -65,6 +65,10 @@ class LogicalChoice:
         for value in (self.model_id, self.reasoning_effort):
             if value.lower() in {"auto", "default", "smart"}:
                 raise ProviderPolicyError("Model and effective effort must be explicit")
+
+    @property
+    def harness(self) -> str:
+        return "claude-native" if self.provider == "anthropic" else "codex-native"
 
     @property
     def choice_id(self) -> str:
@@ -110,12 +114,17 @@ class ProviderPreferences:
     route_review_required: tuple[Provider, ...] = ()
     advisor_model_mode: Literal["selected", "current", "jev"] = "selected"
     advisor_reasoning_effort: str | None = None
+    anthropic: ProviderSelection = ProviderSelection(
+        enabled=False, transport_preference="direct_only"
+    )
 
     def __post_init__(self) -> None:
         if type(self.enabled) is not bool:
             raise ProviderPolicyError("enabled must be boolean")
-        if not isinstance(self.openai, ProviderSelection) or not isinstance(
-            self.glm, ProviderSelection
+        if (
+            not isinstance(self.openai, ProviderSelection)
+            or not isinstance(self.glm, ProviderSelection)
+            or not isinstance(self.anthropic, ProviderSelection)
         ):
             raise ProviderPolicyError("Expected per-provider selections")
         if self.advisor_choice_id is not None:
@@ -139,7 +148,7 @@ class ProviderPreferences:
     def group(self, provider: Provider) -> ProviderSelection:
         if provider not in PROVIDERS:
             raise ProviderPolicyError("Unknown provider")
-        return self.openai if provider == "openai" else self.glm
+        return getattr(self, provider)
 
     def toggle_provider(self, provider: Provider, enabled: bool) -> ProviderPreferences:
         # The advisor remains independent; disabling answers never clears it.
@@ -174,7 +183,16 @@ class ProviderPreferences:
         return {
             "schema_version": 3,
             "enabled": self.enabled,
-            "providers": {"openai": group(self.openai), "glm": group(self.glm)},
+            "providers": {
+                "openai": group(self.openai),
+                "glm": group(self.glm),
+                **(
+                    {"anthropic": group(self.anthropic)}
+                    if self.anthropic
+                    != ProviderSelection(enabled=False, transport_preference="direct_only")
+                    else {}
+                ),
+            },
             "advisor_choice_id": self.advisor_choice_id,
             "human_probability_percent": self.human_probability_percent,
             "unresolved_legacy_ids": list(self.unresolved_legacy_ids),
@@ -211,10 +229,15 @@ class ProviderPreferences:
         if type(version) is not int or version not in (2, 3):
             raise ProviderPolicyError("Unsupported preferences schema")
         groups = payload["providers"]
-        if not isinstance(groups, dict) or set(groups) != set(PROVIDERS):
-            raise ProviderPolicyError("Expected OpenAI and GLM settings")
+        if not isinstance(groups, dict) or set(groups) not in ({"openai", "glm"}, set(PROVIDERS)):
+            raise ProviderPolicyError("Expected supported provider settings")
         parsed = {}
         for provider in PROVIDERS:
+            if provider not in groups:
+                parsed[provider] = ProviderSelection(
+                    enabled=False, transport_preference="direct_only"
+                )
+                continue
             value = groups[provider]
             expected_group_keys = {
                 "enabled",
@@ -264,6 +287,7 @@ class ProviderPreferences:
             tuple(payload["route_review_required"]),
             payload.get("advisor_model_mode", "selected"),
             payload.get("advisor_reasoning_effort"),
+            parsed["anthropic"],
         )
 
 
@@ -381,7 +405,7 @@ class QualifiedRoute:
     route_id: str
     wire_model: str
     wire_effort: str
-    entitlement_kind: Literal["chatgpt_plan", "glm_plan"]
+    entitlement_kind: Literal["chatgpt_plan", "glm_plan", "claude_plan"]
     entitlement_key: str
     equivalence_key: str
     catalog_revision: str
@@ -412,7 +436,9 @@ class QualifiedRoute:
             # a nonempty binding that the runner can compare.
             object.__setattr__(self, "connection_id", self.route_id)
         _text(self.connection_id)
-        expected = "chatgpt_plan" if self.choice.provider == "openai" else "glm_plan"
+        expected = {"openai": "chatgpt_plan", "glm": "glm_plan", "anthropic": "claude_plan"}[
+            self.choice.provider
+        ]
         if self.entitlement_kind != expected or type(self.ready) is not bool:
             raise ProviderPolicyError("Route must use the declared plan, not another billing lane")
 
@@ -646,10 +672,14 @@ def resolve_advisor(
             raise ProviderPolicyError(
                 "The selected advisor effort is unavailable for the current model"
             )
+        if matches[0].provider == "anthropic":
+            raise ProviderPolicyError("Use Jev Router to select Claude Code answers")
         return matches[0]
     matches = [row for row in catalog if row.choice_id == preferences.advisor_choice_id]
     if len(matches) != 1:
         raise ProviderPolicyError("Saved advisor is unavailable or ambiguous")
+    if matches[0].provider == "anthropic":
+        raise ProviderPolicyError("Use Jev Router to select Claude Code answers")
     return matches[0]
 
 

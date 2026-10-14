@@ -6,6 +6,7 @@ import { AdvisorPromptPreview } from "./AdvisorPromptPreview";
 import type { LogicalOption, ProviderPreferences, ProviderGroup } from "./providerPreferences";
 import {
   PROVIDER_GROUPS,
+  providerSelection,
   PROVIDER_LABELS,
   activeChoiceIds,
   effortLabel,
@@ -108,7 +109,12 @@ export function ProviderSettingsPanel(props: ProviderSettingsPanelProps) {
       {prompt}
       <fieldset disabled={busy}>
         <p>Allowed answers — shared by you and the advisor</p>
-        {PROVIDER_GROUPS.map((provider) => (
+        {PROVIDER_GROUPS.filter(
+          (provider) =>
+            provider !== "anthropic" ||
+            options.some((option) => option.provider === provider) ||
+            value.providers.anthropic,
+        ).map((provider) => (
           <ProviderCard
             key={provider}
             provider={provider}
@@ -189,7 +195,7 @@ function ProviderCard({
   approvalChoices,
   omniRouteOnly,
 }: ProviderCardProps) {
-  const selected = value.providers[provider];
+  const selected = providerSelection(value, provider);
   const onlyOmniRoute =
     omniRouteOnly?.providers.includes(provider) ??
     selected.transport_preference === "omniroute_only";
@@ -239,7 +245,7 @@ function ProviderCard({
             type="checkbox"
             role="switch"
             checked={selected.enabled}
-            aria-label={`Enable ${provider === "openai" ? "OpenAI" : "GLM"} answers`}
+            aria-label={`Enable ${provider === "openai" ? "OpenAI" : provider === "anthropic" ? "Claude" : "GLM"} answers`}
             onChange={(event) =>
               onChange(toggleProvider(value, provider, event.currentTarget.checked))
             }

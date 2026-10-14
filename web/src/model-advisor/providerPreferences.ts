@@ -1,10 +1,11 @@
 /** V3 presentation model. The server owns qualification, persistence and dispatch. */
-export type ProviderGroup = "openai" | "glm";
+export type ProviderGroup = "openai" | "glm" | "anthropic";
 export type TransportPreference = "omniroute_preferred" | "omniroute_only" | "direct_only";
-export const PROVIDER_GROUPS: readonly ProviderGroup[] = ["openai", "glm"];
+export const PROVIDER_GROUPS: readonly ProviderGroup[] = ["openai", "glm", "anthropic"];
 export const PROVIDER_LABELS: Record<ProviderGroup, string> = {
   openai: "OpenAI / ChatGPT plan",
   glm: "GLM / Z.AI",
+  anthropic: "Anthropic / Claude Code",
 };
 
 const REASONING_EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra"] as const;
@@ -30,7 +31,8 @@ export interface ProviderSelection {
 export interface ProviderPreferences {
   schema_version: 3;
   enabled: boolean;
-  providers: Record<ProviderGroup, ProviderSelection>;
+  providers: Record<"openai" | "glm", ProviderSelection> &
+    Partial<Record<"anthropic", ProviderSelection>>;
   advisor_choice_id: string | null;
   advisor_model_mode?: "selected" | "current" | "jev";
   advisor_reasoning_effort?: string | null;
@@ -42,7 +44,7 @@ export interface ProviderPreferences {
 export interface ProviderPreferencesV2 {
   schema_version: 2;
   enabled: boolean;
-  providers: Record<ProviderGroup, Omit<ProviderSelection, "disabled_model_ids">>;
+  providers: Record<"openai" | "glm", Omit<ProviderSelection, "disabled_model_ids">>;
   advisor_choice_id: string | null;
   human_probability_percent: number;
   unresolved_legacy_ids: string[];
@@ -106,6 +108,21 @@ export function emptyProviderPreferences(): ProviderPreferences {
   };
 }
 
+export function providerSelection(
+  prefs: ProviderPreferences,
+  provider: ProviderGroup,
+): ProviderSelection {
+  return (
+    prefs.providers[provider] ?? {
+      enabled: false,
+      collapsed: false,
+      selected_choice_ids: [],
+      disabled_model_ids: [],
+      transport_preference: "direct_only",
+    }
+  );
+}
+
 export function updateProvider(
   prefs: ProviderPreferences,
   provider: ProviderGroup,
@@ -113,7 +130,10 @@ export function updateProvider(
 ): ProviderPreferences {
   return {
     ...prefs,
-    providers: { ...prefs.providers, [provider]: { ...prefs.providers[provider], ...patch } },
+    providers: {
+      ...prefs.providers,
+      [provider]: { ...providerSelection(prefs, provider), ...patch },
+    },
   };
 }
 
@@ -132,7 +152,7 @@ export function toggleModel(
   modelId: string,
   enabled: boolean,
 ): ProviderPreferences {
-  const disabled = new Set(prefs.providers[provider].disabled_model_ids);
+  const disabled = new Set(providerSelection(prefs, provider).disabled_model_ids);
   if (enabled) disabled.delete(modelId);
   else disabled.add(modelId);
   return updateProvider(prefs, provider, { disabled_model_ids: [...disabled] });
@@ -144,7 +164,7 @@ export function toggleEffort(
   choiceId: string,
   checked: boolean,
 ): ProviderPreferences {
-  const remembered = new Set(prefs.providers[provider].selected_choice_ids);
+  const remembered = new Set(providerSelection(prefs, provider).selected_choice_ids);
   if (checked) remembered.add(choiceId);
   else remembered.delete(choiceId);
   return updateProvider(prefs, provider, { selected_choice_ids: [...remembered] });
@@ -168,7 +188,7 @@ export function activeChoiceIds(
   if (!prefs.enabled) return [];
   const byId = new Map(catalog.map((option) => [option.choice_id, option]));
   return PROVIDER_GROUPS.flatMap((provider) => {
-    const group = prefs.providers[provider];
+    const group = providerSelection(prefs, provider);
     if (!group.enabled) return [];
     return group.selected_choice_ids.filter((id) => {
       const option = byId.get(id);
@@ -239,7 +259,7 @@ export function effectiveOptions(
   if (byId.size !== catalog.length) throw new Error("Duplicate logical choice ID");
   const result: LogicalOption[] = [];
   for (const provider of PROVIDER_GROUPS) {
-    const group = prefs.providers[provider];
+    const group = providerSelection(prefs, provider);
     if (!group.enabled) continue;
     for (const id of group.selected_choice_ids) {
       const option = byId.get(id);

@@ -109,3 +109,35 @@ it("shows disabled OmniRoute choices for a Codex host with only a direct connect
     screen.getByText("OmniRoute is not currently qualified for this provider on this host."),
   ).toBeVisible();
 });
+
+it("lets Jev use a qualified Claude Code answer without changing old provider choices", () => {
+  const value = emptyProviderPreferences();
+  const claude: LogicalOption = {
+    choice_id: "claude-choice",
+    provider: "anthropic",
+    model_id: "claude-test",
+    display_name: "Claude Test",
+    reasoning_effort: "high",
+    model_ids: ["claude-test"],
+    access_lanes: ["claude-direct"],
+    available: true,
+  };
+  function ClaudeSettings() {
+    const [preferences, setPreferences] = useState({ ...value, enabled: true });
+    return (
+      <ProviderSettingsPanel
+        idPrefix="claude-test"
+        value={preferences}
+        options={[...options, claude]}
+        dirty={false}
+        onChange={setPreferences}
+        onSave={() => {}}
+      />
+    );
+  }
+  render(<ClaudeSettings />);
+  fireEvent.click(screen.getByRole("switch", { name: "Enable Claude answers" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Claude Test: High" }));
+  expect(screen.getByRole("checkbox", { name: "Claude Test: High" })).toBeChecked();
+  expect(screen.getByText("Anthropic / Claude Code")).toBeVisible();
+});

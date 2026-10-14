@@ -815,6 +815,7 @@ class _ForwardDedupeState:
     usage: dict[str, float] | None = None
     context_window: int | None = None
     recorded_token_usage: dict[str, int] | None = None
+    recorded_api_usage: dict[str, dict[str, int]] = field(default_factory=dict)
     observed_model: str | None = None
     posted_model: str | None = None
     observed_title: str | None = None
@@ -4876,14 +4877,23 @@ async def _forward_available_items(
     # record's ``message.usage`` — one final figure per API call — and the
     # dedupe keeps each one to a single span, so summing matches what the
     # provider actually charged for.
+    for api_usage in result.api_usage:
+        _record_claude_api_usage(session_id, api_usage, dedupe)
     token_usage = _gen_ai_usage_tokens(result.latest_usage)
-    record_token_usage = token_usage if token_usage != dedupe.recorded_token_usage else None
+    record_token_usage = (
+        token_usage
+        if not result.api_usage and token_usage != dedupe.recorded_token_usage
+        else None
+    )
     if usage_changed or window_changed:
         try:
             await _post_external_session_usage(
                 client,
                 session_id=session_id,
-                usage=posted_usage,
+                usage={
+                    **(posted_usage or {}),
+                    **({"model": result.latest_model} if result.latest_model else {}),
+                },
                 context_window=resolved_context_window,
                 token_usage=record_token_usage,
             )
@@ -5284,7 +5294,10 @@ async def _post_external_conversation_item(
         telemetry.session_scope(session_id),
         telemetry.span(
             "claude_native.forward",
-            attributes={"omnigent.response_id": item.response_id},
+            attributes={
+                "omnigent.response_id": item.response_id,
+                "omnigent.harness": "claude-native",
+            },
         ),
     ):
         resp = await client.post(
@@ -5529,10 +5542,22 @@ async def _post_external_session_usage(
     # in MLflow / any OTel backend.
     with (
         telemetry.session_scope(session_id),
-        telemetry.span("claude_native.usage") as usage_span,
+        telemetry.span(
+            "claude_native.usage",
+            attributes={
+                "omnigent.harness": "claude-native",
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "anthropic",
+                **(
+                    {"gen_ai.response.model": usage["model"]}
+                    if usage and isinstance(usage.get("model"), str)
+                    else {}
+                ),
+            },
+        ) as usage_span,
     ):
         if token_usage is not None:
-            telemetry.record_llm_usage(usage_span, token_usage)
+            telemetry.record_llm_usage(usage_span, _claude_otel_usage(token_usage))
         resp = await client.post(
             f"/v1/sessions/{session_id}/events",
             json={"type": "external_session_usage", "data": payload},
@@ -5549,6 +5574,53 @@ _GEN_AI_TOKEN_KEYS = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
 )
+
+
+def _record_claude_api_usage(
+    session_id: str, api_usage: object, dedupe: _ForwardDedupeState
+) -> None:
+    """Count each API message, including several read in one poll.
+
+    Claude repeats message ids for content blocks. Export only counter growth
+    for that id; distinct calls with identical counts still count separately.
+    """
+    from omnigent.harnesses.claude_native.bridge import ClaudeApiUsage
+    from omnigent.runtime import telemetry
+
+    if not isinstance(api_usage, ClaudeApiUsage):
+        return
+    counters = _gen_ai_usage_tokens(api_usage.usage)
+    if not counters:
+        return
+    previous = dedupe.recorded_api_usage.get(api_usage.message_id, {})
+    delta = {
+        key: value - previous.get(key, 0)
+        for key, value in counters.items()
+        if value > previous.get(key, 0)
+    }
+    if not delta:
+        return
+    attributes = {
+        "omnigent.harness": "claude-native",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": "anthropic",
+        "gen_ai.response.id": api_usage.message_id,
+    }
+    if api_usage.model:
+        attributes["gen_ai.response.model"] = api_usage.model
+    if api_usage.response_id:
+        attributes["omnigent.response_id"] = api_usage.response_id
+    with (
+        telemetry.session_scope(session_id),
+        telemetry.span("claude_native.usage", attributes=attributes) as usage_span,
+    ):
+        telemetry.record_llm_usage(usage_span, _claude_otel_usage(delta))
+    dedupe.recorded_api_usage[api_usage.message_id] = {
+        **previous,
+        **{key: max(value, previous.get(key, 0)) for key, value in counters.items()},
+    }
+    if len(dedupe.recorded_api_usage) > 4096:
+        del dedupe.recorded_api_usage[next(iter(dedupe.recorded_api_usage))]
 
 
 def _gen_ai_usage_tokens(usage: Mapping[str, float | str] | None) -> dict[str, int] | None:
@@ -5575,6 +5647,18 @@ def _gen_ai_usage_tokens(usage: Mapping[str, float | str] | None) -> dict[str, i
     if "input_tokens" not in tokens and "output_tokens" not in tokens:
         return None
     return tokens
+
+
+def _claude_otel_usage(counters: dict[str, int]) -> dict[str, int]:
+    # Anthropic's input_tokens excludes cache reads/writes; OTel input usage
+    # includes them. Keep raw counters for dedupe and the native context gauge.
+    return {
+        **counters,
+        "input_tokens": sum(
+            counters.get(key, 0)
+            for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+        ),
+    }
 
 
 async def _post_external_permission_mode_change(

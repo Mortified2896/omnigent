@@ -123,9 +123,9 @@ async def test_post_session_usage_records_gen_ai_token_attributes(
     spans = [s for s in otel_exporter.get_finished_spans() if s.name == "claude_native.usage"]
     assert len(spans) == 1
     attrs = dict(spans[0].attributes or {})
-    assert attrs["gen_ai.usage.input_tokens"] == 1523
+    assert attrs["gen_ai.usage.input_tokens"] == 1773
     assert attrs["gen_ai.usage.output_tokens"] == 847
-    assert attrs["gen_ai.usage.total_tokens"] == 1523 + 847
+    assert attrs["gen_ai.usage.total_tokens"] == 1773 + 847
     assert attrs["gen_ai.usage.cache_read_input_tokens"] == 200
     assert attrs["gen_ai.usage.cache_creation_input_tokens"] == 50
 

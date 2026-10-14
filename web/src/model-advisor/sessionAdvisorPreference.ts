@@ -44,11 +44,15 @@ export function readSessionAdvisorChoices(
       !isStringList(prefs.route_review_required) ||
       typeof prefs.human_probability_percent !== "number" ||
       (prefs.advisor_model_mode !== undefined &&
-        !["selected", "current"].includes(prefs.advisor_model_mode)) ||
+        !["selected", "current", "jev"].includes(prefs.advisor_model_mode)) ||
       (prefs.advisor_reasoning_effort != null && typeof prefs.advisor_reasoning_effort !== "string")
     )
       return null;
-    for (const group of [prefs.providers.openai, prefs.providers.glm]) {
+    for (const group of [
+      prefs.providers.openai,
+      prefs.providers.glm,
+      ...(prefs.providers.anthropic ? [prefs.providers.anthropic] : []),
+    ]) {
       if (
         typeof group.enabled !== "boolean" ||
         typeof group.collapsed !== "boolean" ||

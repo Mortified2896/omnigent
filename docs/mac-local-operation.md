@@ -51,12 +51,51 @@ Codex app's bundled CLI and set `OMNIGENT_CODEX_PATH` to the intended executable
 in the server/host environment. Restart the host to refresh discovery, then
 verify a real turn; a catalog entry alone does not prove account entitlement.
 
+## Claude Code and Jev harness selection
+
+Install Claude Code using Omnigent's supported harness installer and sign in on
+this Mac with `claude auth login --claudeai`. Confirm `claude auth status` reports
+first-party OAuth before enabling Claude answers in Model advisor settings.
+The host qualifies subscription choices from the installed CLI's live model
+catalog and an account digest; API keys and managed gateways are not treated as
+Claude subscription entitlement.
+
+Select Jev Router as the advisor and enable the desired OpenAI and Claude answer
+choices. Each candidate is a concrete harness, model and reasoning effort:
+OpenAI and GLM choices use native Codex; Claude choices use native Claude Code.
+The decision balance still controls whether your choice or Jev's recommendation
+runs. Set it to 0% me / 100% advisor for automatic assignment. Existing defaults
+and choice IDs remain compatible.
+
+A new chat launches the chosen harness explicitly. Follow-ups remain within the
+current native harness and may change its model or effort; start a new chat to
+change harness. The native Claude launch rechecks the frozen account, model,
+effort and connection before starting, so an account or gateway change blocks
+the old route instead of silently using a different billing lane.
+
 ## Local tracing and outcomes
 
 Follow [direct OpenTelemetry tracing](../deploy/docs/opentelemetry-tracing.md).
 Reuse a suitable collector only after inspecting its routing and retention. If an
 existing collector belongs to another workflow, choose unused loopback ports for
 a separate collector and keep its archive independent.
+
+Native Codex exports completed-call usage from `tokenUsage.last`, with duplicate
+notifications suppressed. Native Claude exports every API message's transcript
+usage, including several messages read in one poll, and suppresses repeated
+content blocks by message ID. Usage spans identify the Omnigent session, native
+harness and observed model; cache counts are included only when reported.
+Claude's OpenTelemetry input total includes cache reads and writes, while its
+native usage gauge retains the original Anthropic counter breakdown.
+Codex turn IDs are not fabricated as provider response IDs. These are Omnigent
+spans, independent of vendor-native OpenTelemetry logs or beta traces.
+
+Keep `OMNIGENT_OTEL_CAPTURE_CONTENT=false` for diagnostic metadata without
+prompt, response or tool-result content. Verify a real turn in each authenticated
+harness and inspect the collector's received spans; unit tests, a healthy
+collector and a model catalog are separate evidence. Do not restart a busy host:
+its shutdown stops its runners. Use an isolated candidate host for acceptance,
+then switch the normal host once its sessions are idle.
 
 Human outcomes, review comments, model attribution, and eligibility are stored
 in the Omnigent chat database. Trace files provide diagnostic metadata and
