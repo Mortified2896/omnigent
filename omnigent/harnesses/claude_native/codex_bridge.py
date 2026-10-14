@@ -134,6 +134,7 @@ class Bridge:
         self.lock = asyncio.Lock()
         self.usage_audit: list[dict] = []
         self.resume_diagnostic: dict = {}
+        self.last_error: dict = {}
 
     def key(self) -> str:
         result = subprocess.run(
@@ -201,6 +202,7 @@ class Bridge:
                     "models": rows,
                     "usage_audit": self.usage_audit[-32:],
                     "resume_diagnostic": self.resume_diagnostic,
+                    "last_error": self.last_error,
                 }
             )
         finally:
@@ -384,10 +386,14 @@ class Bridge:
         if not await self.authorized(request):
             return JSONResponse({"error": {"type": "authentication_error"}}, status_code=401)
         turn = None
+        phase = "parse"
+        body = {}
         try:
             body = await request.json()
+            phase = "model"
             if body.get("model") not in self.config["models"]:
                 raise ValueError("Model is outside the configured Codex bridge catalog")
+            phase = "content"
             for message in body.get("messages", []):
                 blocks = message.get("content", [])
                 if isinstance(blocks, list) and any(
@@ -414,11 +420,13 @@ class Bridge:
                     },
                     status_code=400,
                 )
+            phase = "start"
             async with self.lock:
                 for old in list(self.pending.values()):
                     if time.monotonic() - old.touched > 300:
                         await self.discard(old)
                 turn = await self.start(body)
+            phase = "response"
             result = await self.response(body, turn)
             if body.get("stream"):
                 return StreamingResponse(message_events(result), media_type="text/event-stream")
@@ -427,7 +435,8 @@ class Bridge:
             if turn:
                 await self.discard(turn)
             raise
-        except Exception:  # noqa: BLE001 — fixed response without upstream payloads
+        except Exception as error:  # noqa: BLE001 — fixed response without upstream payloads
+            self.last_error = {"phase": phase, "type": type(error).__name__}
             if turn:
                 await self.discard(turn)
             # No upstream error/credential/prompt content enters local logs.
