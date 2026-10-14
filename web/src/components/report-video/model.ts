@@ -45,7 +45,9 @@ export async function videoRequest(path: string, init?: RequestInit): Promise<Re
 }
 export function sceneAt(scenes: Scene[], time: number): number {
   let index = 0;
-  while (index + 1 < scenes.length && scenes[index + 1].start <= time) index++;
+  // Native media clocks round to microseconds when seeking. Treat that rounding
+  // as the boundary so a paused story preview does not show the previous card.
+  while (index + 1 < scenes.length && scenes[index + 1].start <= time + 0.000001) index++;
   return index;
 }
 export function validateScenes(scenes: Scene[], duration: number): void {

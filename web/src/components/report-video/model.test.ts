@@ -12,6 +12,11 @@ describe("report scene times", () => {
     expect(sceneAt(scenes, 6)).toBe(1);
     expect(sceneAt(scenes, 0.5)).toBe(0);
   });
+  it("shows the selected card when a native seek rounds its start to microseconds", () => {
+    const precise = [scenes[0], { ...scenes[1], start: 2.13000049 }];
+    expect(sceneAt(precise, 2.13)).toBe(1);
+    expect(sceneAt(precise, 2.129)).toBe(0);
+  });
   it("accepts fractional times and rejects unordered, missing, and out-of-range scenes", () => {
     expect(() => validateScenes(scenes, 8.13)).not.toThrow();
     expect(() => validateScenes([scenes[1]], 8.13)).toThrow("first scene");
