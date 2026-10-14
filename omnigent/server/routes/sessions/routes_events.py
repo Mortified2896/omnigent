@@ -527,6 +527,55 @@ async def _raise_if_runner_re_tunnelled_to_another_replica(
         )
 
 
+async def recover_advisor_session_transport(
+    request: Request,
+    user_id: str | None,
+    session_id: str,
+    *,
+    service: Any = None,
+) -> dict[str, Any]:
+    """Resume the same native thread on its qualified Direct leg, without input."""
+    service = service or getattr(request.app.state, "model_advisor_service", None)
+    if service is None:
+        return {"changed": False}
+    async with _retry_recovery_lock(session_id):
+        result = await service.recover_session_transport(user_id, session_id)
+        store = service._conversation_store
+        conv = await asyncio.to_thread(store.get_conversation, session_id)
+        if conv is None or (conv.labels or {}).get("omnigent.advisor.fallback_pending") != "1":
+            return result
+        if conv.live_status in {"running", "waiting"}:
+            raise OmnigentError(
+                "Wait for the current response to finish before recovering its transport",
+                code=ErrorCode.CONFLICT,
+            )
+        runner_router = getattr(request.app.state, "runner_router", None)
+        runner = await _get_runner_client(session_id, runner_router)
+        if runner is not None:
+            closed = await runner.delete(
+                f"/v1/sessions/{session_id}/resources/terminals/terminal_codex_main",
+                timeout=15.0,
+            )
+            if closed.status_code not in (200, 404):
+                raise OmnigentError(
+                    "Could not close the failed Codex connection; retry recovery",
+                    code=ErrorCode.RUNNER_UNAVAILABLE,
+                )
+        initializer = getattr(request.app.state, "runner_session_initializer", None)
+        if initializer is not None:
+            initializer.invalidate_session(session_id)
+        await _recover_retry_session(
+            request=request,
+            session_id=session_id,
+            conversation_store=store,
+            runner_router=runner_router,
+        )
+        await asyncio.to_thread(
+            store.set_labels, session_id, {"omnigent.advisor.fallback_pending": "0"}
+        )
+        return {**result, "recovered": True, "route_id": "codex-direct"}
+
+
 async def _recover_retry_session(
     *,
     request: Request,
@@ -1099,6 +1148,17 @@ def register_events_routes(
                 "This side chat ended when its runner restarted and can't be continued.",
                 code=ErrorCode.CONFLICT,
             )
+        if (conv.labels or {}).get(ADVISOR_ROUND_LABEL_KEY) and (
+            body.type == _RETRY_SESSION_TYPE
+            or (body.type == "message" and body.data.get("role", "user") == "user")
+        ):
+            recovery = await recover_advisor_session_transport(
+                cast("Request", request), user_id, session_id
+            )
+            if recovery.get("recovered"):
+                conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+                if conv is None:
+                    raise _session_not_found()
         if body.type == _RETRY_SESSION_TYPE:
             return await _retry_session_single_flight(
                 request=cast("Request", request),

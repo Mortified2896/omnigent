@@ -106,6 +106,7 @@ const RETRYABLE_ERROR_CODES = new Set([
   "rate_limit_exceeded",
   "transient_upstream_error",
   "connection_error",
+  "codex_turn_error",
 ]);
 
 // Failed turns the runner itself survived: the session is healthy, so retry
@@ -116,6 +117,7 @@ export const CONTINUE_TURN_ERROR_CODES = new Set([
   "rate_limit_exceeded",
   "transient_upstream_error",
   "connection_error",
+  "codex_turn_error",
 ]);
 
 interface ParsedErrorMessage {

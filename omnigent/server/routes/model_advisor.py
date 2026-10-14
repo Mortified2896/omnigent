@@ -192,6 +192,17 @@ def create_model_advisor_router(
         except AdvisorContractError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @router.post(
+        "/model-advisor/sessions/{session_id}/recover-transport",
+        dependencies=_JSON_MUTATION_GUARDS,
+    )
+    async def recover_transport(request: Request, session_id: str) -> dict[str, Any]:
+        """Recover the saved fallback; continuation remains a separate user action."""
+        from omnigent.server.routes.sessions.routes_events import recover_advisor_session_transport
+
+        user = require_user(request, auth_provider)
+        return await recover_advisor_session_transport(request, user, session_id, service=service)
+
     @router.get("/model-advisor/catalog")
     async def get_catalog(request: Request, host_id: str) -> dict[str, Any]:
         """Project the live qualified choice set for one host."""

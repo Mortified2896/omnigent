@@ -1751,3 +1751,166 @@ def test_authenticated_gateway_aliases_match_direct_choices(model, wire_prefix):
     gateway.pop("advisorConnectionId")
     unqualified = build_host_catalog([direct, gateway])
     assert {r.transport for r in unqualified.routes_by_choice[choice.choice_id]} == {"direct"}
+
+
+@pytest.mark.parametrize(
+    "mode", ["recover", "busy", "changed_account", "unauthorized", "close_retry"]
+)
+def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch, mode):
+    """An established thread changes transport once, never replays its input/tools."""
+    from unittest.mock import AsyncMock
+
+    import httpx
+
+    from omnigent.server.routes.sessions import routes_events
+
+    store = _FakeConversationStore()
+    launches = []
+
+    async def launcher(body, *, user_id, request=None):
+        launches.append(body)
+        store.conversation = SimpleNamespace(
+            id="conv_new",
+            host_id="host_1",
+            agent_id="ag_1",
+            workspace="/repo",
+            kind="default",
+            live_status="failed",
+            labels={**body.labels, "omnigent.last_task_error_code": "codex_turn_error"},
+            model_override=body.model_override,
+            reasoning_effort=body.reasoning_effort,
+            external_session_id="native-existing-thread",
+            reported_model=body.model_override,
+        )
+        return _FakeSession()
+
+    client, registry = client_for(
+        db_uri,
+        launcher=launcher,
+        randbelow=lambda _: 0,
+        catalog_models=PROVIDER_CATALOG_MODELS,
+        conversation_store=store,
+        session_authorizer=lambda user, sid: user == "alice@test" and sid == "conv_new",
+        session_harness_resolver=lambda _: "codex-native",
+        reply={
+            "status": "ok",
+            "raw_output": json.dumps(
+                {"candidate_id": PROVIDER_OPENAI.choice_id, "rationale": "Keep this choice."}
+            ),
+            "latency_ms": 1,
+        },
+    )
+    preferences = {
+        "schema_version": 2,
+        "enabled": True,
+        "providers": {
+            "openai": {
+                "enabled": True,
+                "collapsed": False,
+                "selected_choice_ids": [PROVIDER_OPENAI.choice_id],
+                "transport_preference": "omniroute_preferred",
+            },
+            "glm": {
+                "enabled": False,
+                "collapsed": False,
+                "selected_choice_ids": [],
+                "transport_preference": "omniroute_preferred",
+            },
+        },
+        "advisor_choice_id": PROVIDER_OPENAI.choice_id,
+        "human_probability_percent": 50,
+        "unresolved_legacy_ids": [],
+        "route_review_required": [],
+    }
+    native = SimpleNamespace(delete=AsyncMock(return_value=httpx.Response(200)))
+    ready = AsyncMock(return_value={"recovered": True})
+    monkeypatch.setattr(routes_events, "_get_runner_client", AsyncMock(return_value=native))
+    monkeypatch.setattr(routes_events, "_recover_retry_session", ready)
+    # The fake store mirrors the server's label-only post-readiness write.
+    store.set_labels = lambda sid, labels: store.conversation.labels.update(labels)
+    with client:
+        saved = client.put(
+            "/v1/model-advisor/preferences",
+            headers=JSON_ALICE,
+            json={"host_id": "host_1", "expected_version": 0, "preferences": preferences},
+        )
+        assert saved.status_code == 200, saved.text
+        created = client.post(
+            "/v1/model-advisor/rounds",
+            headers=JSON_ALICE,
+            json={
+                "host_id": "host_1",
+                "task": "Keep the existing work",
+                "human_choice_id": PROVIDER_OPENAI.choice_id,
+                "submission_key": "recovery",
+            },
+        )
+        assert created.status_code == 200, created.text
+        round_ = _settle(client, created.json()["round_id"])
+        confirmed = client.post(
+            f"/v1/model-advisor/rounds/{round_['round_id']}/confirm",
+            headers=JSON_ALICE,
+            json={
+                "host_id": "host_1",
+                "expected_version": round_["version"],
+                "launch": {"agent_id": "ag_1", "workspace": "/repo"},
+            },
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        original_labels = dict(store.conversation.labels)
+        if mode == "busy":
+            store.conversation.live_status = "running"
+        if mode == "changed_account":
+            registry._models = [
+                {**row, "advisorEntitlementKey": "different-account"}
+                if row.get("accessLane") == "codex-direct"
+                else row
+                for row in PROVIDER_CATALOG_MODELS
+            ]
+        if mode == "close_retry":
+            native.delete.side_effect = [httpx.Response(503), httpx.Response(200)]
+        headers = (
+            {**JSON_ALICE, "X-Test-User": "bob@test"} if mode == "unauthorized" else JSON_ALICE
+        )
+        response = client.post(
+            "/v1/model-advisor/sessions/conv_new/recover-transport", headers=headers, json={}
+        )
+        if mode in {"busy", "changed_account", "unauthorized"}:
+            expected = {"busy": 200, "changed_account": 409, "unauthorized": 403}[mode]
+            assert response.status_code == expected, response.text
+            assert store.updates == []
+            native.delete.assert_not_awaited()
+            ready.assert_not_awaited()
+            return
+        if mode == "close_retry":
+            assert response.status_code == 503, response.text
+            assert store.conversation.labels["omnigent.advisor.fallback_pending"] == "1"
+            ready.assert_not_awaited()
+            response = client.post(
+                "/v1/model-advisor/sessions/conv_new/recover-transport",
+                headers=JSON_ALICE,
+                json={},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["route_id"] == "codex-direct"
+        assert response.json()["recovered"] is True
+        assert len(store.updates) == 1
+        assert len(launches) == 1
+        assert store.conversation.external_session_id == "native-existing-thread"
+        assert store.conversation.model_override == "gpt-5.5"
+        assert store.conversation.reasoning_effort == "medium"
+        for key in [
+            "omnigent.advisor.round_id",
+            "omnigent.advisor.logical_choice_id",
+            "omnigent.advisor.transport_plan",
+        ]:
+            assert store.conversation.labels[key] == original_labels[key]
+        assert store.conversation.labels["omnigent.advisor.fallback_pending"] == "0"
+        ready.assert_awaited_once()
+        again = client.post(
+            "/v1/model-advisor/sessions/conv_new/recover-transport", headers=JSON_ALICE, json={}
+        )
+        assert again.status_code == 200
+        assert again.json()["changed"] is False
+        assert len(store.updates) == 1
+        ready.assert_awaited_once()

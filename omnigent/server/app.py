@@ -3391,6 +3391,7 @@ def create_app(
                 session, agent_store=agent_store, agent_cache=agent_cache
             ),
         )
+        app.state.model_advisor_service = model_advisor_service
         app.include_router(
             create_model_advisor_router(
                 auth_provider=auth_provider,

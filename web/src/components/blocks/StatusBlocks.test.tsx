@@ -714,7 +714,22 @@ describe("ErrorBanner", () => {
     await waitFor(() => expect(onRetry).toHaveBeenCalledTimes(1));
   });
 
-  it.each(["native_turn_error", "codex_turn_error", "codex_reauth_required", "unauthorized"])(
+  it("offers continuation for a failed Codex stream", async () => {
+    const onRetry = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ErrorBanner
+        message="stream disconnected before completion: stream closed before response.completed"
+        source="execution"
+        code="codex_turn_error"
+        onRetry={onRetry}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(onRetry).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["native_turn_error", "codex_reauth_required", "unauthorized"])(
     "does not infer rate-limit retry from the message for code %s",
     (code) => {
       render(

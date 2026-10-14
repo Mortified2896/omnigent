@@ -34,7 +34,10 @@ from fastapi import HTTPException
 from opentelemetry import trace
 
 from omnigent.entities.conversation import Conversation
-from omnigent.model_advisor_binding import encode_transport_binding_label
+from omnigent.model_advisor_binding import (
+    decode_transport_binding_label,
+    encode_transport_binding_label,
+)
 from omnigent.model_advisor_core import AccessClass, AdvisorContractError, Candidate, PoolSnapshot
 from omnigent.model_advisor_provider_policy import (
     LogicalChoice,
@@ -2028,6 +2031,125 @@ class ModelAdvisorService:
                 },
             )
             raise
+
+    async def recover_session_transport(
+        self, user_id: str | None, session_id: str
+    ) -> dict[str, Any]:
+        """Move a failed chat to its qualified fallback without replaying a turn."""
+        if self._session_authorizer is None or not await asyncio.to_thread(
+            self._session_authorizer, user_id, session_id
+        ):
+            raise HTTPException(403, "session edit access is required")
+        conv = await asyncio.to_thread(self._conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise HTTPException(404, "session not found")
+        labels = conv.labels or {}
+        raw_plan = decode_transport_binding_label(labels, ADVISOR_TRANSPORT_PLAN_LABEL_KEY)
+        if raw_plan is None or labels.get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) == "1":
+            return {"changed": False}
+        if not isinstance(raw_plan, str):
+            raise HTTPException(409, "The saved Advisor transport plan is invalid")
+        try:
+            plan = TransportPlan.from_payload(json.loads(raw_plan))
+        except (ValueError, TypeError, ProviderPolicyError) as exc:
+            raise HTTPException(409, "The saved Advisor transport plan is invalid") from exc
+        fallback = plan.fallback
+        if (
+            plan.preference != "omniroute_preferred"
+            or plan.primary.transport != "omniroute"
+            or fallback is None
+            or plan.choice.provider != "openai"
+            or plan.choice.harness != "codex-native"
+        ):
+            return {"changed": False}
+        if labels.get("omnigent.access_lane") == fallback.route_id:
+            return {"changed": False, "route_id": fallback.route_id}
+        if conv.live_status != "failed":
+            return {"changed": False}
+        if labels.get("omnigent.last_task_error_code") not in {
+            "codex_turn_error",
+            "transient_upstream_error",
+            "connection_error",
+            "runner_unavailable",
+            "native_terminal_start_failed",
+            "rate_limit_exceeded",
+        }:
+            return {"changed": False}
+        if labels.get(ADVISOR_LOGICAL_CHOICE_LABEL_KEY) != plan.choice.choice_id:
+            raise HTTPException(409, "The saved Advisor choice has changed")
+        raw_route = decode_transport_binding_label(labels, ADVISOR_DISPATCH_ROUTE_LABEL_KEY)
+        if not isinstance(raw_route, str):
+            raise HTTPException(409, "The saved Advisor route is invalid")
+        try:
+            current = QualifiedRoute.from_payload(json.loads(raw_route))
+        except (ValueError, TypeError, ProviderPolicyError) as exc:
+            raise HTTPException(409, "The saved Advisor route is invalid") from exc
+        if (
+            current != plan.primary
+            or conv.model_override != current.wire_model
+            or (conv.reasoning_effort or "not_applicable") != current.wire_effort
+            or labels.get(ADVISOR_CONNECTION_LABEL_KEY) != current.connection_id
+        ):
+            raise HTTPException(409, "The active route differs from the saved Advisor assignment")
+        host_id, agent_id, workspace = conv.host_id, conv.agent_id, conv.workspace
+        if not host_id or not agent_id or not workspace:
+            raise HTTPException(409, "The Advisor session has no resumable host binding")
+        catalog = await self.load_catalog(user_id, host_id)
+        qualified = next(
+            (
+                route
+                for route in catalog.routes_by_choice.get(plan.choice.choice_id, ())
+                if route.ready
+                and route.transport == fallback.transport
+                and route.route_id == fallback.route_id
+                and route.connection_id == fallback.connection_id
+                and route.entitlement_key == fallback.entitlement_key
+                and route.entitlement_kind == fallback.entitlement_kind
+                and route.equivalence_key == fallback.equivalence_key
+                and route.wire_model == fallback.wire_model
+                and route.wire_effort == fallback.wire_effort
+            ),
+            None,
+        )
+        if qualified is None or qualified.connection_id is None:
+            raise HTTPException(
+                409, "The direct Codex fallback is no longer available for this account"
+            )
+        updated_labels = {
+            **encode_transport_binding_label(
+                ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
+                json.dumps(qualified.to_payload(), sort_keys=True, separators=(",", ":")),
+            ),
+            ADVISOR_CONNECTION_LABEL_KEY: qualified.connection_id,
+            "omnigent.access_lane": qualified.route_id,
+            "omnigent.advisor.fallback_pending": "1",
+        }
+        await self._apply_provider_route_to_session(
+            user_id=user_id,
+            host_id=host_id,
+            session_id=session_id,
+            agent_id=agent_id,
+            workspace=workspace,
+            route=qualified,
+            labels=updated_labels,
+        )
+        await asyncio.to_thread(
+            self.repository.record_provider_transport_attempt,
+            self.owner_id(user_id),
+            host_id,
+            labels[ADVISOR_ROUND_LABEL_KEY],
+            attempt={
+                "phase": "answer",
+                "transport": qualified.transport,
+                "route_id": qualified.route_id,
+                "connection_id": qualified.connection_id,
+                "model": qualified.wire_model,
+                "effort": qualified.wire_effort,
+                "status": "failed_session_fallback",
+                "reason": "user_requested_recovery",
+            },
+        )
+        return {"changed": True, "route_id": qualified.route_id}
 
     async def _apply_provider_route_to_session(
         self,
