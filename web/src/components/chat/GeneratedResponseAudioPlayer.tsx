@@ -13,6 +13,7 @@ import { GeneratedAudioDockContext } from "./GeneratedAudioDock";
 import { useQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/identity";
 import { getOmnigentHostConfig } from "@/lib/host";
+import { isCurrentServerLocal } from "@/lib/serverOrigin";
 import {
   activeReadAlongUnitIndex,
   clearReadAlongHighlight,
@@ -60,6 +61,7 @@ interface GeneratedAudioTimingsWire {
 async function readGeneratedAudioList(sessionId: string): Promise<GeneratedAudioWire[]> {
   const response = await authenticatedFetch(
     `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio`,
+    { priority: "high" },
   );
   if (!response.ok) throw new Error("Could not load generated audio");
   return ((await response.json()) as GeneratedAudioListWire).data;
@@ -68,6 +70,7 @@ async function readGeneratedAudioList(sessionId: string): Promise<GeneratedAudio
 async function readGeneratedAudio(sessionId: string, responseId: string): Promise<Blob> {
   const response = await authenticatedFetch(
     `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content?format=mp3`,
+    { priority: "high" },
   );
   if (!response.ok) throw new Error(`Audio request failed (HTTP ${response.status})`);
   return response.blob();
@@ -115,12 +118,15 @@ export function GeneratedResponseAudioPlayer({
     staleTime: Infinity,
     retry: false,
   });
-  // Standalone media requests carry same-origin cookies / trusted proxy auth.
-  // Let the browser request byte ranges instead of waiting for a complete WAV.
-  // Embedded hosts still need their custom authenticated transport.
+  // Loopback recordings are cheap to preload. A high-priority fetch keeps them
+  // out of the native media loader's low-priority queue behind chat requests;
+  // React Query retains the Blob so returning to a report can reuse it.
+  // Remote servers retain native byte-range playback. Embedded hosts still
+  // need their custom authenticated transport.
+  const localPlayback = isCurrentServerLocal();
   const needsBlob = Boolean(getOmnigentHostConfig().fetcher);
   const [forceBlobFallback, setForceBlobFallback] = useState(false);
-  const useBlobTransport = needsBlob || forceBlobFallback;
+  const useBlobTransport = localPlayback || needsBlob || forceBlobFallback;
   const contentPath = `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content?format=mp3`;
   const [mediaFailed, setMediaFailed] = useState(false);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
@@ -513,7 +519,7 @@ export function GeneratedResponseAudioPlayer({
       <audio
         ref={setAudioElement}
         className="hidden"
-        preload="metadata"
+        preload={useBlobTransport ? "auto" : "metadata"}
         src={useBlobTransport ? (audioUrl ?? undefined) : contentPath}
         onError={(event) => {
           if (!useBlobTransport) {
