@@ -108,6 +108,25 @@ def test_native_and_sdk_claude_keep_distinct_bindings() -> None:
     assert sdk["HARNESS_CLAUDE_SDK_GATEWAY_BASE_URL"] == "https://bifrost.example/anthropic"
 
 
+def test_native_claude_allowlist_preserves_only_permitted_family_aliases() -> None:
+    profile = _profile()
+    profile["providers"]["unity"]["anthropic"]["models"] = {
+        "default": "model-a",
+        "fable": "model-a",
+        "haiku": "model-a",
+        "sonnet": "gateway-tier",
+        "gateway-tier": "model-a",
+        "opus": "outside-allowlist",
+    }
+    with inference_config_scope(profile):
+        native = resolve_native_claude_config(spec=_spec("claude-native"))
+    assert native is not None
+    for alias in ("FABLE", "HAIKU", "SONNET"):
+        assert native.env[f"ANTHROPIC_DEFAULT_{alias}_MODEL"] == "model-a"
+    assert "ANTHROPIC_DEFAULT_OPUS_MODEL" not in native.env
+    assert native.routable_models == ("model-a", "databricks-literal/model-b")
+
+
 def test_pi_legacy_config_error_keeps_native_login_fallback(monkeypatch) -> None:
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config._load_config", Mock(side_effect=OSError("unreadable"))

@@ -178,7 +178,14 @@ def resolve_bound_provider(
             family.resolve_model_tier(family.default_model) if family.default_model else None
         )
         if binding.model_allowlist is not None:
-            models = {f"model_{i}": model for i, model in enumerate(binding.model_allowlist)}
+            # Keep permitted role aliases: Claude uses Haiku for internal
+            # steps even when the main model is an explicit gateway ID.
+            models = {
+                alias: family.resolve_model_tier(alias)
+                for alias in family.models
+                if family.resolve_model_tier(alias) in binding.model_allowlist
+            }
+            models.update({f"model_{i}": model for i, model in enumerate(binding.model_allowlist)})
         if default is not None:
             models["default"] = default
         families[name] = replace(family, models=models)
