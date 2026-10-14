@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,13 @@ def test_expiry_preserves_recent_and_active_audio_and_does_not_resynthesize(
     playback = f"generated-response-audio/playback/{hashlib.sha256(source).hexdigest()}.mp3-v1"
     for name in [key, key + ".timings.json", playback, "reports/keep.md"]:
         artifacts.put(name, source)
+    image_id = "f" * 64
+    video_files = [key + ".video.mp4", key + ".video.mp4.json", key + ".video-image-" + image_id]
+    for name in video_files:
+        artifacts.put(name, source)
+    artifacts.put(
+        key + ".video-assets.json", json.dumps({image_id: {}, "reports/keep.md": {}}).encode()
+    )
     monkeypatch.setattr("omnigent.stores.generated_response_audio.now_epoch", lambda: now)
     store.create_pending(cid, "recent", "elevenlabs:daniel")
     store.claim_pending(cid, "recent")
@@ -45,6 +53,7 @@ def test_expiry_preserves_recent_and_active_audio_and_does_not_resynthesize(
     assert expire_generated_audio(store, artifacts, 7, now=now) == 1
     assert expire_generated_audio(store, artifacts, 7, now=now) == 0
     assert all(not artifacts.exists(name) for name in [key, key + ".timings.json", playback])
+    assert all(not artifacts.exists(name) for name in [*video_files, key + ".video-assets.json"])
     assert artifacts.get("reports/keep.md") == source
     assert artifacts.exists(fresh_key)
     assert store.get(cid, "recent").status == "ready"

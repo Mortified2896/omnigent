@@ -1962,6 +1962,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
             <ScheduledReportSettings
               key={scheduledTaskId}
               taskId={scheduledTaskId}
+              sessionId={conversationId ?? undefined}
               onChooseActions={() =>
                 reportActionsContext?.prepare(reportActionPlanningRequest(scheduledTaskId)) ?? false
               }

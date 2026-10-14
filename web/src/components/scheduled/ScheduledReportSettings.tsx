@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClockIcon, ListChecksIcon, Loader2Icon, Settings2Icon } from "lucide-react";
+import { ClockIcon, ListChecksIcon, Loader2Icon, Settings2Icon, VideoIcon } from "lucide-react";
 import { Link } from "@/lib/routing";
 import { getScheduledTask, updateScheduledTask } from "@/lib/scheduledTasksApi";
 import { SCHEDULED_TASKS_KEY } from "@/hooks/useScheduledTasks";
@@ -16,15 +16,20 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+const ReportVideoDialog = lazy(() => import("@/components/report-video/ReportVideoDialog"));
+
 /** Owner-only controls for the automation that produced this conversation. */
 export function ScheduledReportSettings({
   taskId,
+  sessionId,
   onChooseActions,
 }: {
   taskId: string;
+  sessionId?: string;
   onChooseActions?: () => boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [mode, setMode] = useState("change");
   const [change, setChange] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -100,6 +105,17 @@ export function ScheduledReportSettings({
           Ask here to change future reports.
         </span>
         <div className="flex items-center gap-1">
+          {sessionId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 px-2 text-xs"
+              onClick={() => setVideoOpen(true)}
+            >
+              <VideoIcon className="size-3.5" />
+              Video report
+            </Button>
+          )}
           {onChooseActions && (
             <Button
               variant="ghost"
@@ -133,6 +149,17 @@ export function ScheduledReportSettings({
           </p>
         )}
       </div>
+      {videoOpen && sessionId && (
+        <Suspense
+          fallback={
+            <p role="status" className="px-4 text-sm">
+              Loading video editor…
+            </p>
+          }
+        >
+          <ReportVideoDialog sessionId={sessionId} onClose={() => setVideoOpen(false)} />
+        </Suspense>
+      )}
       <Dialog open={open} onOpenChange={changeOpen}>
         <DialogContent
           className="flex max-h-[85dvh] flex-col overflow-y-auto sm:max-w-2xl"

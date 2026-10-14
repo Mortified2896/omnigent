@@ -34,6 +34,7 @@ from omnigent.server.routes._auth_helpers import (
     get_user_id,
     require_access_and_level,
 )
+from omnigent.server.routes.sessions.routes_report_video import register_report_video_routes
 from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND
 from omnigent.stores import ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
@@ -53,6 +54,14 @@ def register_generated_audio_routes(
     permission_store: PermissionStore | None,
 ) -> None:
     """Register response-scoped generated-audio metadata and content routes."""
+    register_report_video_routes(
+        router,
+        conversation_store=conversation_store,
+        artifact_store=artifact_store,
+        audio_store=audio_store,
+        auth_provider=auth_provider,
+        permission_store=permission_store,
+    )
 
     def _require_audio_store() -> SqlAlchemyGeneratedResponseAudioStore:
         if audio_store is None:
