@@ -29,6 +29,17 @@ interface GeneratedAudioWire {
   sample_rate: number | null;
   error_code: string | null;
   updated_at: number;
+  generation?: {
+    model: string;
+    narration_characters: number;
+    completed_chunks: number;
+    total_chunks: number | null;
+    elapsed_seconds: number;
+    remaining_seconds_low: number | null;
+    remaining_seconds_high: number | null;
+    taking_longer: boolean;
+    estimate_basis: string;
+  } | null;
 }
 
 interface GeneratedAudioListWire {
@@ -273,10 +284,41 @@ export function GeneratedResponseAudioPlayer({
   if (listQuery.isError) return null;
   if (!entry) return null;
   if (entry.status === "pending" || entry.status === "processing") {
+    const estimate = entry.generation;
+    const minutes = (seconds: number) => Math.max(1, Math.ceil(seconds / 60));
+    const remaining =
+      estimate?.remaining_seconds_high != null && estimate.remaining_seconds_low != null
+        ? `about ${minutes(estimate.remaining_seconds_low)}–${minutes(estimate.remaining_seconds_high)} min remaining`
+        : null;
     return renderControls(
-      <span className="text-[11px] text-muted-foreground" role="status">
-        Preparing audio…
-      </span>,
+      <div
+        className="rounded-xl border border-border bg-card px-3 py-2 text-xs text-muted-foreground"
+        role="status"
+      >
+        <p className="font-medium text-foreground">
+          {entry.status === "pending" ? "Audio queued…" : "Preparing audio…"}
+        </p>
+        {estimate && (
+          <>
+            <p>
+              {estimate.model === "eleven_v4" ? "ElevenLabs V4" : estimate.model} ·{" "}
+              {estimate.narration_characters.toLocaleString()} characters
+              {entry.status === "processing" && ` · ${clock(estimate.elapsed_seconds)} elapsed`}
+            </p>
+            <p>
+              {estimate.taking_longer
+                ? "Taking longer than estimated. Still waiting for the speech service."
+                : remaining}
+              {estimate.total_chunks != null &&
+                ` · ${estimate.completed_chunks}/${estimate.total_chunks} sections complete`}
+            </p>
+            <p className="mt-1 text-[11px]">
+              Approximate timing based on {estimate.estimate_basis}. Provider load can change it.
+              {entry.status === "pending" && " Starts when the audio worker is free."}
+            </p>
+          </>
+        )}
+      </div>,
     );
   }
   if (entry.status === "failed") {

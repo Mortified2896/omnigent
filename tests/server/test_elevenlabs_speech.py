@@ -50,15 +50,24 @@ def test_quality_model_and_timings_remain_exact_across_chunks(monkeypatch: pytes
         return httpx.Response(200, json=_response(body["inputs"][0]["text"]))
 
     narration = "First news. Next news. Last news."
+    progress = []
+
+    async def note(characters, completed, total):
+        progress.append((characters, completed, total))
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             return await generate_elevenlabs_speech(
-                client, api_key="test-secret", voice_id="voice123", narration=narration
+                client,
+                api_key="test-secret",
+                voice_id="voice123",
+                narration=narration,
+                on_progress=note,
             )
 
     audio, timings, duration, rate = asyncio.run(run())
     assert len(requests) > 1
+    assert progress[-1] == (len(narration), len(requests), len(requests))
     assert (
         "".join(json.loads(request.content)["inputs"][0]["text"] for request in requests)
         == narration
@@ -100,7 +109,7 @@ def test_keychain_audio_runs_without_local_tts(monkeypatch: pytest.MonkeyPatch):
         return "test-secret"
 
     monkeypatch.setattr("omnigent.onboarding.secrets.load_secret", load_secret)
-    row = SimpleNamespace(voice_profile="elevenlabs:voice123")
+    row = SimpleNamespace(voice_profile="elevenlabs:voice123", updated_at=1)
     audio_store = Mock()
     audio_store.claim_pending.return_value = True
     audio_store.get.return_value = row
@@ -139,7 +148,10 @@ def test_keychain_audio_runs_without_local_tts(monkeypatch: pytest.MonkeyPatch):
     audio_store.mark_failed.assert_not_called()
     audio_store.mark_ready.assert_called_once()
     assert audio_store.mark_ready.call_args.kwargs["sample_rate"] == 24000
-    assert artifact_store.put.call_count == 2  # WAV and its validated word timings.
+    assert any(call.args[0].endswith(".wav") for call in artifact_store.put.call_args_list)
+    assert any(
+        call.args[0].endswith(".generation.json") for call in artifact_store.put.call_args_list
+    )
 
 
 def test_v4_alignment_short_tail_is_bound_to_audio_and_large_mismatch_is_rejected():

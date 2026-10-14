@@ -56,6 +56,7 @@ def test_audio_worker_stores_wav_for_exact_completed_response(legacy_backend: st
                 status="pending",
                 voice_profile="daily-brief",
                 artifact_key=None,
+                updated_at=1,
                 duration_seconds=None,
                 sample_rate=None,
                 error_code=None,
@@ -161,6 +162,7 @@ def test_audio_failure_keeps_text_and_next_response_can_generate_audio() -> None
                     status="pending",
                     voice_profile=voice_profile,
                     artifact_key=None,
+                    updated_at=1,
                     duration_seconds=None,
                     sample_rate=None,
                     error_code=None,
@@ -257,7 +259,7 @@ def test_audio_failure_keeps_text_and_next_response_can_generate_audio() -> None
     assert failed.status == "failed"
     assert failed.error_code == "tts_http_503"
     assert conversation_store.text == "This written response remains available when audio fails."
-    assert artifact_store.values == {}
+    assert not any(key.endswith(".wav") for key in artifact_store.values)
     # A failed row for the same response stays terminal. A later scheduled
     # response gets its own row and can generate audio when TTS recovers.
     failed_retry = audio_store.create_pending("conversation-4", "answer-1", "daily-brief")
@@ -337,6 +339,7 @@ def test_optional_timing_bundle_is_stored_beside_audio_and_bound_to_its_hash() -
             status="pending",
             voice_profile="kokoro-heart",
             artifact_key=None,
+            updated_at=1,
             duration_seconds=None,
             sample_rate=None,
             error_code=None,
@@ -445,6 +448,7 @@ def test_invalid_optional_timing_data_does_not_fail_audio() -> None:
             status="pending",
             voice_profile="kokoro-heart",
             artifact_key=None,
+            updated_at=1,
             duration_seconds=None,
             sample_rate=None,
             error_code=None,

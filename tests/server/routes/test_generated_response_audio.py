@@ -92,6 +92,21 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path, monkeypat
                 "updated_at": listing.json()["data"][0]["updated_at"],
             }
         ]
+        audio_store.create_pending(conversation.id, "answer-2", "elevenlabs:voice123")
+        queued = next(
+            row
+            for row in client.get(url, headers=headers).json()["data"]
+            if row["response_id"] == "answer-2"
+        )
+        assert queued["generation"]["model"] == "eleven_v4"
+        assert queued["generation"]["elapsed_seconds"] == 0
+        assert audio_store.claim_pending(conversation.id, "answer-2")
+        processing = next(
+            row
+            for row in client.get(url, headers=headers).json()["data"]
+            if row["response_id"] == "answer-2"
+        )
+        assert processing["generation"]["remaining_seconds_high"] > 0
         content = client.get(
             f"{url}/answer-1/content",
             headers=headers,

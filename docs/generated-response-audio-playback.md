@@ -95,6 +95,17 @@ recurring task; mock tests alone do not establish account/model access.
 
 ## Automatic audio retention
 
+While audio is queued or generating, the player shows its speech model, narration
+character count, elapsed generation time, and an approximate remaining range.
+Estimates start from the model's last twenty successful generation times per
+character in this workspace (or a clearly labeled initial heuristic). ElevenLabs
+updates completed sections after each request; their observed speed refines the
+remaining estimate. Provider delays can exceed it: the UI says **Taking longer
+than estimated** instead of counting down to a false zero. Queue estimates exclude
+the wait for the worker to become available. These measurements require no extra
+speech requests and contain no narration or credentials. Small per-recording
+progress receipts expire with the audio; the bounded model timing history stays.
+
 Set `OMNIGENT_GENERATED_AUDIO_RETENTION_DAYS` to a positive integer in the
 **server** environment. The Mac Daily Report uses `7`. The server sweeps on
 startup and hourly while running; sleeping or stopped Macs clean up after

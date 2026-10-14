@@ -113,6 +113,48 @@ afterEach(() => {
 });
 
 describe("GeneratedResponseAudioPlayer", () => {
+  it("shows model, report length, progress and a remaining-time range while generating", async () => {
+    const generation = {
+      model: "eleven_v4",
+      narration_characters: 8000,
+      completed_chunks: 1,
+      total_chunks: 4,
+      elapsed_seconds: 80,
+      remaining_seconds_low: 90,
+      remaining_seconds_high: 240,
+      taking_longer: false,
+      estimate_basis: "this generation",
+    };
+    authenticatedFetch.mockResolvedValue(
+      response({ data: [{ ...readyAudioRow("response-1"), status: "processing", generation }] }),
+    );
+    const view = renderPlayer();
+    expect(await screen.findByText(/ElevenLabs V4/)).toHaveTextContent("8,000 characters");
+    expect(screen.getByText(/min remaining/)).toHaveTextContent(
+      "about 2–4 min remaining · 1/4 sections complete",
+    );
+    authenticatedFetch.mockResolvedValue(
+      response({
+        data: [
+          {
+            ...readyAudioRow("response-1"),
+            status: "processing",
+            generation: {
+              ...generation,
+              taking_longer: true,
+              remaining_seconds_low: null,
+              remaining_seconds_high: null,
+            },
+          },
+        ],
+      }),
+    );
+    await act(async () => {
+      await view.client.refetchQueries({ queryKey: ["generated-response-audio", "session-1"] });
+    });
+    expect(await screen.findByText(/Taking longer than estimated/)).toBeInTheDocument();
+    expect(screen.queryByText(/min remaining/)).not.toBeInTheDocument();
+  });
   it("uses the CSS Highlight registry when available", () => {
     installHighlightApi();
     expect((globalThis as typeof globalThis & { CSS?: unknown }).CSS).toBeDefined();
