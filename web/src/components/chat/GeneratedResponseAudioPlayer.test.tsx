@@ -465,6 +465,52 @@ describe("compact audio transport", () => {
     );
   }
 
+  it("does not present canceled playback or browser permission as a failed recording", async () => {
+    mockReady();
+    renderPlayer();
+    const audio = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    const play = vi
+      .spyOn(audio, "play")
+      .mockRejectedValueOnce(new DOMException("Playback canceled", "AbortError"));
+    fireEvent.click(screen.getByRole("button", { name: "Play audio" }));
+    await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(screen.queryByText(/Playback was interrupted/)).not.toBeInTheDocument();
+    play.mockRejectedValueOnce(new DOMException("User gesture required", "NotAllowedError"));
+    fireEvent.click(screen.getByRole("button", { name: "Play audio" }));
+    expect(await screen.findByText(/Press Play again/)).toBeInTheDocument();
+    expect(screen.queryByText(/Playback was interrupted/)).not.toBeInTheDocument();
+    fireEvent.play(audio);
+    expect(screen.queryByText(/Press Play again/)).not.toBeInTheDocument();
+  });
+
+  it("retries playback in place without resynthesizing and restores position, speed and mute", async () => {
+    mockReady();
+    renderPlayer();
+    const audio = (await screen.findByLabelText("Listen to this response")) as HTMLAudioElement;
+    vi.spyOn(audio, "play").mockRejectedValue(new Error("Load failed"));
+    const load = vi.spyOn(audio, "load").mockImplementation(() => {
+      audio.currentTime = 0;
+    });
+    audio.currentTime = 42;
+    fireEvent.change(screen.getByRole("combobox", { name: "Playback speed" }), {
+      target: { value: "1.5" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Mute audio" }));
+    fireEvent.click(screen.getByRole("button", { name: "Play audio" }));
+    const retry = await screen.findByRole("button", { name: "Retry playback" });
+    const requests = authenticatedFetch.mock.calls.length;
+    fireEvent.click(retry);
+    expect(load).toHaveBeenCalledOnce();
+    fireEvent.loadedMetadata(audio);
+    expect(audio.currentTime).toBe(42);
+    expect(audio.playbackRate).toBe(1.5);
+    expect(audio.muted).toBe(true);
+    expect(authenticatedFetch).toHaveBeenCalledTimes(requests);
+    expect(screen.queryByText(/Playback was interrupted/)).not.toBeInTheDocument();
+    fireEvent.play(audio);
+    expect(screen.getByRole("button", { name: "Pause audio" })).toBeInTheDocument();
+  });
+
   it("seeks, clamps skip controls, changes speed, and synchronizes play/pause and mute", async () => {
     mockReady();
     renderPlayer();

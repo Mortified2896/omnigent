@@ -122,6 +122,7 @@ export function GeneratedResponseAudioPlayer({
   const useBlobTransport = needsBlob || forceBlobFallback;
   const contentPath = `/v1/sessions/${encodeURIComponent(sessionId)}/generated-audio/${encodeURIComponent(responseId)}/content?format=mp3`;
   const [mediaFailed, setMediaFailed] = useState(false);
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const blobFallbackPlayback = useRef<{ position: number; resume: boolean } | null>(null);
   const contentQuery = useQuery({
     queryKey: ["generated-response-audio-content", sessionId, responseId, "mp3"],
@@ -160,12 +161,27 @@ export function GeneratedResponseAudioPlayer({
     selectDock?.(playerKey);
     if (!audioElement.paused) audioElement.pause();
     else {
+      setPlaybackBlocked(false);
       try {
         await audioElement.play();
-      } catch {
-        setMediaFailed(true);
+      } catch (error) {
+        // A pause or source switch rejects an outstanding play request. It is
+        // not evidence that the recording failed to load.
+        const name = error && typeof error === "object" && "name" in error ? error.name : "";
+        if (name === "AbortError") return;
+        if (name === "NotAllowedError") setPlaybackBlocked(true);
+        else setMediaFailed(true);
       }
     }
+  };
+  const retryPlayback = () => {
+    if (!audioElement) return;
+    blobFallbackPlayback.current = { position: audioElement.currentTime, resume: false };
+    setMediaFailed(false);
+    setPlaybackBlocked(false);
+    // Reload the existing recording; this never asks the speech worker to
+    // regenerate it. Keep time/rate/mute through the metadata handler.
+    audioElement.load();
   };
   useEffect(
     () => () => selectDock?.((active) => (active === playerKey ? null : active)),
@@ -461,11 +477,20 @@ export function GeneratedResponseAudioPlayer({
           {controls}
           {mediaFailed && (
             <span role="status" className="text-sm text-muted-foreground">
-              Audio could not load. You can{" "}
+              Playback was interrupted.{" "}
+              <button type="button" className="underline" onClick={retryPlayback}>
+                Retry playback
+              </button>
+              {" or "}
               <a className="underline" href={contentPath}>
                 open the recording
               </a>
               .
+            </span>
+          )}
+          {playbackBlocked && (
+            <span role="status" className="text-sm text-muted-foreground">
+              Press Play again to allow audio in this browser.
             </span>
           )}
         </>,
@@ -515,7 +540,11 @@ export function GeneratedResponseAudioPlayer({
           if (Number.isFinite(value) && value > 0) setMediaDuration(value);
         }}
         onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)}
+        onPlay={() => {
+          setPlaying(true);
+          setMediaFailed(false);
+          setPlaybackBlocked(false);
+        }}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
         aria-label="Listen to this response"
