@@ -3378,6 +3378,8 @@ def create_app(
                 conversation_store,
             )
 
+        from omnigent.server.routes._sessions.helpers import _resolve_harness_impl
+
         model_advisor_service = ModelAdvisorService(
             repository=model_advisor_store,
             host_store=host_store,
@@ -3385,6 +3387,9 @@ def create_app(
             conversation_store=conversation_store,
             session_launcher=_model_advisor_session_launcher,
             session_authorizer=_model_advisor_session_authorizer,
+            session_harness_resolver=lambda session: _resolve_harness_impl(
+                session, agent_store=agent_store, agent_cache=agent_cache
+            ),
         )
         app.include_router(
             create_model_advisor_router(

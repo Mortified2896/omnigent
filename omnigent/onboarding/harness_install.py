@@ -1133,6 +1133,42 @@ def install_harness_cli(key: str) -> bool:
     return try_install_harness_cli(key).installed
 
 
+def claude_subscription_identity() -> str | None:
+    """Attest the CLI's current first-party OAuth account without exposing it.
+
+    A working API key is not evidence of Claude subscription entitlement.
+    Re-read this at native launch so an account change invalidates the route.
+    """
+    import hashlib
+
+    binary = shutil.which("claude")
+    if binary is None:
+        return None
+    try:
+        result = subprocess.run(
+            [binary, "auth", "status"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        status = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if (
+        result.returncode != 0
+        or not isinstance(status, dict)
+        or status.get("loggedIn") is not True
+        or status.get("authMethod") != "oauth"
+        or status.get("apiProvider") != "firstParty"
+    ):
+        return None
+    account = [status.get("email"), status.get("orgId")]
+    if not any(isinstance(value, str) and value for value in account):
+        return None
+    identity = json.dumps(account, separators=(",", ":"))
+    return "claude-plan:" + hashlib.sha256(identity.encode()).hexdigest()
+
+
 def harness_cli_logged_in(key: str, timeout: float = _DEFAULT_CLI_PROBE_TIMEOUT_S) -> bool:
     """Return whether the harness CLI itself reports a usable login.
 

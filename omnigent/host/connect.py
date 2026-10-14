@@ -3734,6 +3734,29 @@ class HostProcess:
             return None
         if rows is None:
             return None
+        # Qualify only the CLI-owned subscription lane. Gateway/managed
+        # catalogs must never be relabeled as Claude-plan entitlement.
+        from omnigent.harnesses.claude_native.main import managed_claude_gateway_signal
+        from omnigent.onboarding.harness_install import claude_subscription_identity
+
+        gateway_url, _ = managed_claude_gateway_signal()
+        entitlement = (
+            await asyncio.to_thread(claude_subscription_identity)
+            if config is None and not gateway_url
+            else None
+        )
+        if entitlement:
+            rows = [
+                {
+                    **row,
+                    "accessLane": "claude-direct",
+                    "advisorProvider": "anthropic",
+                    "advisorAccessClass": "claude_plan",
+                    "advisorConnectionId": "claude-login",
+                    "advisorEntitlementKey": entitlement,
+                }
+                for row in rows
+            ]
         routable = list(config.routable_models) if config is not None else []
         return ModelOptionsResult(models=rows, routable_models=routable)
 

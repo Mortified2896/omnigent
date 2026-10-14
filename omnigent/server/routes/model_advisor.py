@@ -64,7 +64,9 @@ class ProviderPreferencesBody(BaseModel):
     advisor_choice_id: str | None = None
     human_probability_percent: int = Field(ge=0, le=100, default=50)
     unresolved_legacy_ids: list[str] = Field(max_length=128, default_factory=list)
-    route_review_required: list[Literal["openai", "glm"]] = Field(default_factory=list)
+    route_review_required: list[Literal["openai", "glm", "anthropic"]] = Field(
+        default_factory=list
+    )
     advisor_model_mode: Literal["selected", "current", "jev"] = "selected"
     advisor_reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
 
@@ -228,6 +230,7 @@ def create_model_advisor_router(
                 {
                     "choice_id": option.choice.choice_id,
                     "provider": option.choice.provider,
+                    "harness": option.choice.harness,
                     "model_id": option.choice.model_id,
                     "display_name": option.display_name,
                     "reasoning_effort": option.choice.reasoning_effort,

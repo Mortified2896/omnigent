@@ -1381,6 +1381,7 @@ def _validate_advisor_dispatch_route(
     allowed_connections = {
         ("openai", "omniroute"): {"omniroute-codex-oauth"},
         ("openai", "codex-direct"): {"codex-login"},
+        ("anthropic", "claude-direct"): {"claude-login"},
         ("glm", "omniroute"): {"omniroute-glm-coding-plan"},
         ("glm", "glm-direct"): {"zai-direct-coding-plan", "zai-direct"},
     }.get((provider, access_lane), set())
@@ -8321,6 +8322,7 @@ class _ClaudeSessionLaunchMetadata:
     #: session carries a routing decision — a web create routes the model
     #: before the pane launches — so no prompt is ever held and replayed.
     turn_routing: bool = False
+    labels: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def _claude_launch_metadata_from_envelope(
@@ -8341,6 +8343,7 @@ def _claude_launch_metadata_from_envelope(
         labels=snapshot.labels,
     )
     return _ClaudeSessionLaunchMetadata(
+        labels=dict(snapshot.labels),
         routing_enabled=routing_class.routing_enabled,
         auto_harness=routing_class.auto_harness,
         turn_routing=routing_class.turn_routing,
@@ -8397,6 +8400,7 @@ async def _load_legacy_claude_launch_metadata(
         labels={str(key): str(value) for key, value in labels.items()},
     )
     metadata = _ClaudeSessionLaunchMetadata(
+        labels={str(key): str(value) for key, value in labels.items()},
         routing_enabled=routing_class.routing_enabled,
         auto_harness=routing_class.auto_harness,
         turn_routing=routing_class.turn_routing,
@@ -8438,6 +8442,64 @@ async def _load_legacy_claude_launch_metadata(
         ),
     )
     return metadata
+
+
+async def _validate_claude_advisor_launch(
+    metadata: _ClaudeSessionLaunchMetadata,
+    *,
+    session_id: str,
+    provider_configured: bool,
+    resolution_failed: bool,
+) -> None:
+    """Keep an Advisor's subscription route bound through native launch."""
+    if metadata.labels.get("omnigent.advisor.round_id") or metadata.labels.get(
+        "omnigent.advisor.transport_plan"
+    ):
+        from omnigent.model_advisor_binding import decode_transport_binding_label
+        from omnigent.stores.conversation_store import (
+            ADVISOR_CONNECTION_LABEL_KEY,
+            ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
+            ADVISOR_LOGICAL_CHOICE_LABEL_KEY,
+            ADVISOR_TRANSPORT_PLAN_LABEL_KEY,
+        )
+
+        _validate_advisor_dispatch_route(
+            raw_route=decode_transport_binding_label(
+                metadata.labels, ADVISOR_DISPATCH_ROUTE_LABEL_KEY
+            ),
+            raw_plan=decode_transport_binding_label(
+                metadata.labels, ADVISOR_TRANSPORT_PLAN_LABEL_KEY
+            ),
+            logical_choice_id=metadata.labels.get(ADVISOR_LOGICAL_CHOICE_LABEL_KEY),
+            session_id=session_id,
+            model_override=metadata.model_override,
+            reasoning_effort=metadata.reasoning_effort,
+            access_lane=metadata.labels.get("omnigent.access_lane"),
+            connection_id=metadata.labels.get(ADVISOR_CONNECTION_LABEL_KEY),
+        )
+        if metadata.labels.get("omnigent.access_lane") != "claude-direct":
+            raise RuntimeError("Claude Code requires its qualified Claude Direct route")
+    if metadata.labels.get("omnigent.access_lane") == "claude-direct":
+        from omnigent.harnesses.claude_native.main import managed_claude_gateway_signal
+
+        gateway_url, _ = managed_claude_gateway_signal()
+        from omnigent.model_advisor_binding import decode_transport_binding_label
+        from omnigent.onboarding.harness_install import claude_subscription_identity
+        from omnigent.stores.conversation_store import ADVISOR_DISPATCH_ROUTE_LABEL_KEY
+
+        raw_route = decode_transport_binding_label(
+            metadata.labels, ADVISOR_DISPATCH_ROUTE_LABEL_KEY
+        )
+        route = json.loads(raw_route) if isinstance(raw_route, str) else {}
+        entitlement = await asyncio.to_thread(claude_subscription_identity)
+        if (
+            provider_configured
+            or gateway_url
+            or resolution_failed
+            or entitlement is None
+            or route.get("entitlement_key") != entitlement
+        ):
+            raise RuntimeError("Claude Direct subscription binding changed before launch")
 
 
 async def _load_claude_launch_metadata(
@@ -8951,6 +9013,12 @@ async def _auto_create_claude_terminal(
             extra={"session_id": session_id},
         )
         _launch_config_resolution_failed = True
+    await _validate_claude_advisor_launch(
+        launch_metadata,
+        session_id=session_id,
+        provider_configured=claude_config is not None,
+        resolution_failed=_launch_config_resolution_failed,
+    )
     # A transient resolver failure must not be cached as "no provider configured".
     # A routed session's turn-1 ``/model`` can only reach ids this launch env
     # spells, so point the family aliases at the router's frozen arms before the

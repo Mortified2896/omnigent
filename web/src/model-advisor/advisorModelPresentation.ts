@@ -16,6 +16,8 @@
 import { routeSummaryForLanes } from "@/lib/modelPickerGroups";
 import {
   PROVIDER_LABELS,
+  PROVIDER_GROUPS,
+  providerSelection,
   effortLabel,
   reasoningEffortRank,
   type LogicalOption,
@@ -179,11 +181,24 @@ export function seedFreshAdvisorDraft(
 ): ProviderPreferences | null {
   if (draft.unresolved_legacy_ids.length) return draft;
   const available = options.filter((option) => option.available);
+  const anthropicIds = draft.providers.anthropic?.selected_choice_ids ?? [];
   const openaiIds = draft.providers.openai.selected_choice_ids;
   const glmIds = draft.providers.glm.selected_choice_ids;
-  if (draft.advisor_model_mode === "jev" && (openaiIds.length || glmIds.length)) return draft;
-  const neverConfigured = openaiIds.length === 0 && glmIds.length === 0 && !draft.advisor_choice_id;
-  if (!neverConfigured && draft.advisor_choice_id && (openaiIds.length || glmIds.length)) {
+  if (
+    draft.advisor_model_mode === "jev" &&
+    (openaiIds.length || glmIds.length || anthropicIds.length)
+  )
+    return draft;
+  const neverConfigured =
+    openaiIds.length === 0 &&
+    glmIds.length === 0 &&
+    anthropicIds.length === 0 &&
+    !draft.advisor_choice_id;
+  if (
+    !neverConfigured &&
+    draft.advisor_choice_id &&
+    (openaiIds.length || glmIds.length || anthropicIds.length)
+  ) {
     return draft;
   }
   if (available.length === 0) return neverConfigured ? null : draft;
@@ -197,10 +212,12 @@ export function seedFreshAdvisorDraft(
     return reconcileAdvisorChoice(declared, null) ?? reconcileAdvisorChoice(providerChoices, null);
   };
   const pool = new Set<string>(
-    [openaiIds, glmIds].flat().filter((id) => available.some((option) => option.choice_id === id)),
+    [openaiIds, glmIds, anthropicIds]
+      .flat()
+      .filter((id) => available.some((option) => option.choice_id === id)),
   );
-  if (openaiIds.length === 0 && glmIds.length === 0) {
-    for (const choice of [defaultChoiceFor("openai"), defaultChoiceFor("glm")]) {
+  if (openaiIds.length === 0 && glmIds.length === 0 && anthropicIds.length === 0) {
+    for (const choice of PROVIDER_GROUPS.map(defaultChoiceFor)) {
       if (choice) pool.add(choice.choice_id);
     }
     if (humanChoiceId && available.some((option) => option.choice_id === humanChoiceId)) {
@@ -236,12 +253,32 @@ export function seedFreshAdvisorDraft(
     : seededIds.filter((id) =>
         available.some((option) => option.choice_id === id && option.provider === "glm"),
       );
-  if (!advisorChoice && nextOpenai === openaiIds && nextGlm === glmIds) return draft;
+  const nextAnthropic = anthropicIds.length
+    ? anthropicIds
+    : seededIds.filter((id) =>
+        available.some((option) => option.choice_id === id && option.provider === "anthropic"),
+      );
+  if (
+    !advisorChoice &&
+    nextOpenai === openaiIds &&
+    nextGlm === glmIds &&
+    nextAnthropic === anthropicIds
+  )
+    return draft;
   return {
     ...draft,
     providers: {
+      ...draft.providers,
       openai: { ...draft.providers.openai, selected_choice_ids: nextOpenai },
       glm: { ...draft.providers.glm, selected_choice_ids: nextGlm },
+      ...(draft.providers.anthropic || nextAnthropic.length
+        ? {
+            anthropic: {
+              ...providerSelection(draft, "anthropic"),
+              selected_choice_ids: nextAnthropic,
+            },
+          }
+        : {}),
     },
     advisor_choice_id: draft.advisor_choice_id ?? advisorChoice?.choice_id ?? null,
   };

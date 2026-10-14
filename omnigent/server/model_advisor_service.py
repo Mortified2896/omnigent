@@ -113,6 +113,7 @@ _LANE_CLASSIFICATIONS: dict[str, tuple[AccessClass, str, str]] = {
     # lane: (access_class, provider_id, connection_id)
     "codex-direct": ("chatgpt_plan", "openai-codex-subscription", "codex-login"),
     "glm-direct": ("glm_plan", "z.ai", "zai-direct"),
+    "claude-direct": ("claude_plan", "anthropic-claude-subscription", "claude-login"),
 }
 _OMNIROUTE_GLM: tuple[AccessClass, str, str] = ("glm_plan", "omniroute", "omniroute-glm")
 
@@ -166,6 +167,16 @@ def _lane_classification(
     row: dict[str, Any] | None = None,
 ) -> tuple[AccessClass, str, str] | None:
     if lane in _LANE_CLASSIFICATIONS:
+        if lane == "claude-direct" and (
+            row is None
+            or row.get("advisorProvider") != "anthropic"
+            or row.get("advisorAccessClass") != "claude_plan"
+            or row.get("advisorConnectionId") != "claude-login"
+            or not isinstance(row.get("advisorEntitlementKey"), str)
+            or not row["advisorEntitlementKey"].startswith("claude-plan:")
+            or not model_id.startswith("claude-")
+        ):
+            return None
         # An extended catalog can carry GLM rows while probing Codex's
         # built-in subscription provider. Never turn a GLM checkpoint into a
         # ChatGPT-plan candidate merely because the probe stamped the direct
@@ -309,7 +320,7 @@ def build_host_catalog(models: list[dict[str, Any]]) -> HostCatalog:
                 lane_id=lane if isinstance(lane, str) else "",
                 provider_id=provider_id,
                 connection_id=connection_id,
-                harness="codex",
+                harness="claude-native" if access_class == "claude_plan" else "codex",
                 model_id=model_id.strip(),
                 reasoning_effort=effort,
                 access_class=access_class,
@@ -416,6 +427,8 @@ def _logical_choice_for_row(
         else:
             canonical = _OPENAI_DIRECT_TO_CANONICAL.get(model_id, model_id)
             transport = "direct"
+    elif access_class == "claude_plan":
+        provider, canonical, transport = "anthropic", model_id, "direct"
     else:
         provider = "glm"
         if lane == "omniroute":
@@ -433,7 +446,11 @@ def _logical_choice_for_row(
         row.get("advisorEntitlementKey")
         if isinstance(row.get("advisorEntitlementKey"), str)
         else (
-            "chatgpt-plan:rtx-codex-owner" if provider == "openai" else "glm-plan:rtx-coding-plan"
+            {
+                "openai": "chatgpt-plan:rtx-codex-owner",
+                "glm": "glm-plan:rtx-coding-plan",
+                "anthropic": "claude-plan:host-login",
+            }[provider]
         )
     )
     # Host metadata is trusted only because this row came from the
@@ -454,9 +471,15 @@ def _logical_choice_for_row(
             else model_id
         ),
         wire_effort=effort,
-        entitlement_kind="chatgpt_plan" if provider == "openai" else "glm_plan",
+        entitlement_kind=(
+            "chatgpt_plan"
+            if provider == "openai"
+            else "claude_plan"
+            if provider == "anthropic"
+            else "glm_plan"
+        ),
         entitlement_key=entitlement_key,
-        equivalence_key=f"{provider}:codex-native:responses:{canonical}:{effort}",
+        equivalence_key=f"{provider}:{choice.harness}:responses:{canonical}:{effort}",
         catalog_revision="host-catalog",
         ready=True,
         connection_id=qualified_connection,
@@ -476,6 +499,7 @@ class ModelAdvisorService:
         conversation_store: ConversationStore,
         session_launcher: Callable[..., Any],
         session_authorizer: Callable[[str | None, str], bool] | None = None,
+        session_harness_resolver: Callable[[Any], str | None] | None = None,
         randbelow: Callable[[int], int] = secrets.randbelow,
     ) -> None:
         self.repository = repository
@@ -484,6 +508,7 @@ class ModelAdvisorService:
         self._conversation_store = conversation_store
         self._session_launcher = session_launcher
         self._session_authorizer = session_authorizer
+        self._session_harness_resolver = session_harness_resolver
         self._randbelow = randbelow
         self._background_tasks: set[asyncio.Task[None]] = set()
 
@@ -513,6 +538,24 @@ class ModelAdvisorService:
             raise HTTPException(status_code=409, detail="host is offline")
         return conn
 
+    async def _harness_for_session(self, session: Any) -> str:
+        from omnigent.harness_aliases import canonicalize_harness
+
+        if self._session_harness_resolver is not None:
+            harness = await asyncio.to_thread(self._session_harness_resolver, session)
+            harness = canonicalize_harness(harness)
+            if harness not in {"codex-native", "claude-native"}:
+                raise HTTPException(
+                    409, "The current coding harness is not supported by this Advisor route"
+                )
+            return harness
+        # Compatibility for standalone service adapters without agent stores.
+        return canonicalize_harness(getattr(session, "harness_override", None)) or (
+            "claude-native"
+            if (session.reported_model or session.model_override or "").startswith("claude-")
+            else "codex-native"
+        )
+
     # ── catalog ──────────────────────────────────────────────
 
     async def load_catalog(self, user_id: str | None, host_id: str) -> HostCatalog:
@@ -541,6 +584,20 @@ class ModelAdvisorService:
             )
         models = result.get("models")
         rows = [row for row in models if isinstance(row, dict)] if isinstance(models, list) else []
+        configured = getattr(self._host_store.get_host(host_id), "configured_harnesses", {}) or {}
+        if configured.get("claude-native") is True:
+            try:
+                claude_result = await request_host_model_options(
+                    host_registry=self._host_registry,
+                    host_conn=conn,
+                    harness="claude-native",
+                    timeout_s=60.0,
+                )
+            except (ConnectionError, asyncio.TimeoutError) as exc:
+                raise HTTPException(502, "Claude host model-options lookup failed") from exc
+            if claude_result.get("status") != "ok":
+                raise HTTPException(502, "Claude host model-options lookup failed")
+            rows.extend(row for row in claude_result.get("models", []) if isinstance(row, dict))
         try:
             catalog = build_host_catalog(rows)
         except AdvisorContractError as exc:
@@ -859,6 +916,25 @@ class ModelAdvisorService:
                     "model": source_model,
                 }
                 source_lane = source.labels.get("omnigent.access_lane") or "codex-direct"
+            source_harness = await self._harness_for_session(source)
+            frozen_preferences = replace(
+                frozen_preferences,
+                openai=(
+                    frozen_preferences.openai
+                    if source_harness == "codex-native"
+                    else replace(frozen_preferences.openai, enabled=False)
+                ),
+                glm=(
+                    frozen_preferences.glm
+                    if source_harness == "codex-native"
+                    else replace(frozen_preferences.glm, enabled=False)
+                ),
+                anthropic=(
+                    frozen_preferences.anthropic
+                    if source_harness == "claude-native"
+                    else replace(frozen_preferences.anthropic, enabled=False)
+                ),
+            )
             if keep_chosen_model:
                 if current is None:
                     raise HTTPException(
@@ -876,6 +952,14 @@ class ModelAdvisorService:
                         selected_choice_ids=tuple(
                             id
                             for id in frozen_preferences.openai.selected_choice_ids
+                            if id in allowed
+                        ),
+                    ),
+                    anthropic=replace(
+                        frozen_preferences.anthropic,
+                        selected_choice_ids=tuple(
+                            id
+                            for id in frozen_preferences.anthropic.selected_choice_ids
                             if id in allowed
                         ),
                     ),
@@ -1722,6 +1806,7 @@ class ModelAdvisorService:
             labels = labels_for(route)
             return SessionCreateRequest(
                 agent_id=launch["agent_id"],
+                harness_override=route.choice.harness,
                 initial_items=[
                     SessionEventInput(
                         type="message",
@@ -1748,7 +1833,16 @@ class ModelAdvisorService:
                 reasoning_effort=(
                     None if route.wire_effort == "not_applicable" else route.wire_effort
                 ),
-                terminal_launch_args=launch.get("terminal_launch_args"),
+                terminal_launch_args=(
+                    launch.get("terminal_launch_args")
+                    if next(
+                        choice
+                        for choice in frozen.pool
+                        if choice.choice_id == frozen.human_choice_id
+                    ).harness
+                    == route.choice.harness
+                    else None
+                ),
             )
 
         await asyncio.to_thread(
@@ -1931,6 +2025,9 @@ class ModelAdvisorService:
                 status_code=409,
                 detail="The advisor round must target the same host, agent, and workspace",
             )
+        current_harness = await self._harness_for_session(conv)
+        if current_harness != route.choice.harness:
+            raise HTTPException(409, "Choose a new chat to change the coding harness")
         if conv.live_status in {"running", "waiting"}:
             raise HTTPException(status_code=409, detail="Wait for the current response to finish")
 

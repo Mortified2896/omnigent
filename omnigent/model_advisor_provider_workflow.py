@@ -197,12 +197,15 @@ class LogicalFrozenRound:
             raise LogicalAdvisorError("Invalid assignment probability")
         if self.schema_version not in (2, 3):
             raise LogicalAdvisorError("Unsupported logical round version")
-        if len(self.transport_preferences) != 2 or {
-            provider for provider, _ in self.transport_preferences
-        } != {"openai", "glm"}:
-            raise LogicalAdvisorError("Both provider connection preferences must be frozen")
+        if len(self.transport_preferences) != len(
+            {name for name, _ in self.transport_preferences}
+        ) or {provider for provider, _ in self.transport_preferences} not in (
+            {"openai", "glm"},
+            {"openai", "glm", "anthropic"},
+        ):
+            raise LogicalAdvisorError("Provider connection preferences must be frozen")
         for provider, preference in self.transport_preferences:
-            if provider not in {"openai", "glm"} or preference not in {
+            if provider not in {"openai", "glm", "anthropic"} or preference not in {
                 "omniroute_preferred",
                 "omniroute_only",
                 "direct_only",
@@ -633,6 +636,11 @@ def freeze_logical_round(
         transport_preferences=(
             ("openai", preferences.openai.transport_preference),
             ("glm", preferences.glm.transport_preference),
+            *(
+                (("anthropic", preferences.anthropic.transport_preference),)
+                if any(choice.provider == "anthropic" for choice in pool)
+                else ()
+            ),
         ),
         advisor_transport=advisor_plan,
         schema_version=3,

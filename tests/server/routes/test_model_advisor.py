@@ -431,6 +431,7 @@ def client_for(
     catalog_models: list[dict[str, Any]] | None = None,
     conversation_store: Any = None,
     session_authorizer: Any = None,
+    session_harness_resolver: Any = None,
 ) -> tuple[TestClient, _FakeRegistry]:
     repository = AdvisorRepository(get_or_create_engine(db_uri))
     conn = _FakeConnection(reply if reply is not None else dict(ADVISOR_OK_REPLY))
@@ -446,6 +447,7 @@ def client_for(
         session_launcher=launcher
         or (lambda body, *, user_id, request=None: _async_session(_FakeSession())),
         session_authorizer=session_authorizer,
+        session_harness_resolver=session_harness_resolver,
         **service_kwargs,
     )
     app = FastAPI()
