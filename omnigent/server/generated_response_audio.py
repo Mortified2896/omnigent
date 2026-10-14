@@ -20,6 +20,12 @@ import httpx
 from omnigent_client._http import is_loopback_url
 
 from omnigent.db.db_models import current_workspace_id, workspace_scope
+from omnigent.errors import OmnigentError
+from omnigent.server.elevenlabs_speech import (
+    ELEVENLABS_VOICE_PREFIX,
+    ElevenLabsSpeechError,
+    generate_elevenlabs_speech,
+)
 from omnigent.server.generated_response_audio_timings import (
     timings_artifact_key,
     validate_timing_sidecar_bytes,
@@ -341,8 +347,6 @@ class GeneratedResponseAudioCoordinator:
                         sample_rate=rate,
                     )
                     return
-                if not self.tts_url:
-                    raise _PostprocessError("tts_not_configured")
                 response_id, narration = await asyncio.to_thread(
                     _response_narration,
                     self.conversation_store,
@@ -357,36 +361,59 @@ class GeneratedResponseAudioCoordinator:
                 )
                 if entry is None:
                     raise _PostprocessError("audio_record_missing")
-                # Scheduled narration always uses Kokoro's native word timings.
-                # Legacy session state must never restore the old Qwen default.
                 assert self._client is not None
-                result = await self._client.post(
-                    f"{self.tts_url}/v1/audio/speech",
-                    json={
-                        "text": narration,
-                        "voice_profile": scheduled_audio_voice(entry.voice_profile),
-                        "language": "English",
-                        "backend": SCHEDULED_AUDIO_BACKEND,
-                        "include_timings": True,
-                    },
-                )
-                if result.status_code != 200:
-                    raise _PostprocessError(f"tts_http_{result.status_code}")
-                _logger.info(
-                    "Scheduled audio response=%s backend=%s hatchet_run_id=%s",
-                    work.response_id,
-                    SCHEDULED_AUDIO_BACKEND,
-                    result.headers.get("x-hatchet-run-id", "unavailable"),
-                )
-                try:
-                    duration = float(result.headers["x-audio-duration-seconds"])
-                    rate = int(result.headers["x-audio-sample-rate"])
-                except (KeyError, ValueError) as exc:
-                    raise _PostprocessError("tts_invalid_audio_metadata") from exc
-                payload, timing_payload = _parse_speech_response(
-                    result.headers.get("content-type", "audio/wav"),
-                    result.content,
-                )
+                if entry.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX):
+                    from omnigent.onboarding.secrets import load_secret
+
+                    try:
+                        api_key = await asyncio.to_thread(load_secret, "elevenlabs")
+                    except (OmnigentError, OSError, ValueError):
+                        raise _PostprocessError("elevenlabs_key_unavailable") from None
+                    try:
+                        payload, timing_payload, duration, rate = await generate_elevenlabs_speech(
+                            self._client,
+                            api_key=api_key or "",
+                            voice_id=entry.voice_profile.removeprefix(ELEVENLABS_VOICE_PREFIX),
+                            narration=narration,
+                        )
+                    except ElevenLabsSpeechError as exc:
+                        raise _PostprocessError(exc.code) from None
+                    finally:
+                        api_key = None
+                    _logger.info(
+                        "Scheduled audio response=%s backend=elevenlabs/eleven_v4",
+                        work.response_id,
+                    )
+                else:
+                    if not self.tts_url:
+                        raise _PostprocessError("tts_not_configured")
+                    result = await self._client.post(
+                        f"{self.tts_url}/v1/audio/speech",
+                        json={
+                            "text": narration,
+                            "voice_profile": scheduled_audio_voice(entry.voice_profile),
+                            "language": "English",
+                            "backend": SCHEDULED_AUDIO_BACKEND,
+                            "include_timings": True,
+                        },
+                    )
+                    if result.status_code != 200:
+                        raise _PostprocessError(f"tts_http_{result.status_code}")
+                    _logger.info(
+                        "Scheduled audio response=%s backend=%s hatchet_run_id=%s",
+                        work.response_id,
+                        SCHEDULED_AUDIO_BACKEND,
+                        result.headers.get("x-hatchet-run-id", "unavailable"),
+                    )
+                    try:
+                        duration = float(result.headers["x-audio-duration-seconds"])
+                        rate = int(result.headers["x-audio-sample-rate"])
+                    except (KeyError, ValueError) as exc:
+                        raise _PostprocessError("tts_invalid_audio_metadata") from exc
+                    payload, timing_payload = _parse_speech_response(
+                        result.headers.get("content-type", "audio/wav"),
+                        result.content,
+                    )
                 await asyncio.to_thread(self.artifact_store.put, key, payload)
                 if timing_payload is not None:
                     try:

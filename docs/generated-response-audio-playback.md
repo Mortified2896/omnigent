@@ -58,3 +58,29 @@ the returned Hatchet run ID with the response ID for tracing. The daily trigger
 is owned by Omnigent's RRULE scheduler; Hatchet owns queued speech execution.
 Validate both the next scheduled fire and a real Kokoro job with native timings
 when accepting a deployment, rather than relying on the TTS health response.
+
+## ElevenLabs scheduled narration
+
+A scheduled task can select ElevenLabs with
+`audio_voice_profile: "elevenlabs:<voice_id>"` and `audio_enabled: true`.
+The audio worker retrieves `keychain:elevenlabs` through Omnigent's existing
+secret store (service `omnigent`, account `elevenlabs` on macOS). The key belongs
+to the user running the **server**, which performs audio post-processing; the
+connected agent host does not receive it. A Mac Keychain entry is not available
+to a server on another machine.
+
+This route explicitly uses the standard `eleven_v4` model. It does not select
+Turbo or Flash, set latency optimizations, retry a failed provider request, or
+fall back to another speech service. It requests 24 kHz PCM through ElevenLabs'
+[speech-with-timestamps endpoint](https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps)
+and stores a WAV plus validated word timings for the existing player. Narration
+over 9,000 characters is split at a sentence or word boundary; the exact text
+and timing offsets are preserved across chunks. Provider failures are saved as
+short error codes without response bodies or credentials. The written report
+remains available when audio fails.
+
+The direct ElevenLabs path does not depend on `OMNIGENT_TTS_URL` or the RTX
+speech worker. Existing recordings remain unchanged. Generating speech sends
+the cleaned report narration to ElevenLabs and uses that account's credits.
+Verify the intended voice and a short real V4 generation before enabling the
+recurring task; mock tests alone do not establish account/model access.
