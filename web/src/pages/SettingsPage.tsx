@@ -131,7 +131,7 @@ import {
 } from "@/hooks/useConversations";
 import { conversationDisplayLabel } from "@/shell/sidebarNav";
 import { absoluteTime } from "@/lib/relativeTime";
-import { useNavigate } from "@/lib/routing";
+import { Link, useNavigate } from "@/lib/routing";
 import { useSettingsRoute } from "@/shell/settingsNav";
 import { ImportSessionsPanel } from "@/shell/ImportSessionsPanel";
 import { isThemeMode, normalizeThemeMode, type ThemeMode } from "@/components/theme/themeMode";
@@ -1680,6 +1680,16 @@ function GeneralSection() {
   return (
     <Section title="General" description="Configure general Omnigent behavior.">
       <div className="flex flex-col gap-3">
+        <h2 className="text-ui font-medium">Reports and automations</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
+          <p className="min-w-0 flex-1 text-ui text-muted-foreground">
+            Edit recurring prompts and schedules. Each report also has its own Report settings
+            button.
+          </p>
+          <Button asChild variant="outline">
+            <Link to="/tasks">Manage automations</Link>
+          </Button>
+        </div>
         <h2 className="text-ui font-medium">Composer</h2>
         <div className="rounded-xl border border-border bg-card p-4">
           <ComposerSendShortcutControl />

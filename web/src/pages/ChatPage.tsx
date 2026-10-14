@@ -2,6 +2,7 @@ import {
   GeneratedAudioDock,
   GeneratedAudioDockProvider,
 } from "@/components/chat/GeneratedAudioDock";
+import { ScheduledReportSettings } from "@/components/scheduled/ScheduledReportSettings";
 import { FeedbackDiscussionContext } from "@/components/FeedbackContext";
 import { FeedbackDiscussionComposerContext } from "@/components/FeedbackDiscussionControls";
 import { isFeedbackReviewFocused } from "@/components/ai-elements/conversation";
@@ -1198,6 +1199,11 @@ export function ChatPage() {
       subagentRoutingEligible={subagentRoutingEligible}
       subAgentLabel={subAgentLabel}
       wrapperLabel={capabilitySource.labels[WRAPPER_LABEL_KEY] ?? null}
+      scheduledTaskId={
+        isOwnerLevel(permissionLevel)
+          ? (capabilitySource.labels["omnigent.scheduled_task_id"] ?? null)
+          : null
+      }
       advisorHostId={activeSession?.hostId ?? activeConv?.host_id ?? null}
       advisorAgentId={activeSession?.agentId ?? activeConv?.agent_id ?? agentId ?? null}
       advisorWorkspace={activeSession?.workspace ?? activeConv?.workspace ?? null}
@@ -1511,6 +1517,7 @@ interface MainAgentSurfaceProps {
   subAgentLabel: string | null;
   /** The session's ``omnigent.wrapper`` label; see ``ComposerProps``. */
   wrapperLabel: string | null;
+  scheduledTaskId?: string | null;
   advisorHostId?: string | null;
   advisorAgentId?: string | null;
   advisorWorkspace?: string | null;
@@ -1615,6 +1622,7 @@ export function updateWarmTerminalSurfaces(
  */
 const MainAgentSurface = memo(function MainAgentSurfaceImpl({
   conversationId,
+  scheduledTaskId,
   status,
   isWorking,
   showsWorking,
@@ -1932,6 +1940,9 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
             }
           />
 
+          {scheduledTaskId && (
+            <ScheduledReportSettings key={scheduledTaskId} taskId={scheduledTaskId} />
+          )}
           <GeneratedAudioDock />
           <Composer
             ref={composerRef}

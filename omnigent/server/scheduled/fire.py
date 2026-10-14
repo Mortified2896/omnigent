@@ -177,6 +177,26 @@ def _prompt_event(prompt: str) -> SessionEventInput:
     )
 
 
+def report_prompt(task: ScheduledTask) -> str:
+    """Give a run its automation identity and persistent follow-up semantics."""
+    return (
+        f"{task.prompt}\n\n"
+        "<omnigent_automation_context>\n"
+        f"This conversation is a run of scheduled task {task.id}. "
+        "Answer ordinary follow-up questions about this report normally. "
+        "When the user explicitly asks to change future reports, first use "
+        "sys_scheduled_task_list to read this exact task's current saved prompt, "
+        "then use sys_scheduled_task_update with its scheduled_task_id and the "
+        "revised prompt. Preserve the existing topics and instructions unless "
+        "the user requests their removal. Change only the prompt unless the "
+        "user also requests other settings. Confirm that the change is saved "
+        "for future runs only after the server accepts the update; on failure "
+        "explain that it was not saved. Do not modify the automation merely "
+        "while generating a scheduled report.\n"
+        "</omnigent_automation_context>"
+    )
+
+
 def build_on_fire(
     deps: FireDeps,
     *,
@@ -1246,7 +1266,7 @@ def _make_connected_host_dispatch(deps: FireDeps) -> LaunchDispatch:
         await _dispatch_session_event_to_runner(
             conv.id,
             conv_for_dispatch,
-            _prompt_event(task.prompt),
+            _prompt_event(report_prompt(task)),
             deps.conversation_store,
             runner_client,
             agent_name=None,
@@ -1326,7 +1346,7 @@ def _make_managed_sandbox_dispatch(deps: FireDeps) -> LaunchDispatch:
         await _dispatch_session_event_to_runner(
             conv.id,
             fresh,
-            _prompt_event(task.prompt),
+            _prompt_event(report_prompt(task)),
             deps.conversation_store,
             runner_client,
             agent_name=None,

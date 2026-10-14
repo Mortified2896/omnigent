@@ -1614,7 +1614,10 @@ async def test_managed_fires_use_regular_launch_with_unchanged_server_config(
     assert dispatch.await_count == 2
     for call in dispatch.await_args_list:
         assert call.args[1] is bound[call.args[0]]
-        assert call.args[2].data["content"] == [{"type": "input_text", "text": "do the thing"}]
+        prompt = call.args[2].data["content"][0]["text"]
+        assert prompt.startswith("do the thing\n\n")
+        assert "sys_scheduled_task_update" in prompt
+        assert "scheduled task task_1" in prompt
         assert call.args[4] is runner_client
     assert [run["status"] for run in store.runs] == ["failed" if dispatch_fails else "running"] * 2
     terminate.assert_not_awaited()

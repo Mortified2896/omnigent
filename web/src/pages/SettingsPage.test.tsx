@@ -293,6 +293,15 @@ describe("SettingsPage", () => {
     localStorage.removeItem(BACKGROUND_SESSION_TITLES_STORAGE_KEY);
   });
 
+  it("links from General settings to recurring report prompts and schedules", () => {
+    renderPage("/settings/general");
+    expect(screen.getByRole("heading", { name: "Reports and automations" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Manage automations" })).toHaveAttribute(
+      "href",
+      "/tasks",
+    );
+  });
+
   it("renders session auto-rename enabled by default", async () => {
     renderPage("/settings/general");
 
