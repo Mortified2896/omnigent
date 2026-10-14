@@ -228,10 +228,23 @@ function rememberedBrowserLoginOptions({ store, getServerUrl, showError }) {
   };
 }
 
+function recoveryUrl(serverUrl, currentUrl, requestedUrl) {
+  const origin = new URL(serverUrl).origin;
+  for (const candidate of [currentUrl, requestedUrl]) {
+    try {
+      if (new URL(candidate).origin === origin) return candidate;
+    } catch {
+      /* A blank window has no HTTP origin yet. */
+    }
+  }
+  return serverUrl;
+}
+
 module.exports = {
   createRememberedBrowserLogins,
   loginKey,
   cookieDetails,
   owningConversation,
   rememberedBrowserLoginOptions,
+  recoveryUrl,
 };

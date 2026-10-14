@@ -10,7 +10,7 @@ function once(source, before, after) {
 function addRememberedBrowserLogins(main, registry) {
   main = once(main, 'const { createBrowserViewRegistry } = require("./browserViewRegistry");', `const { createBrowserViewRegistry } = require("./browserViewRegistry");
 const { safeStorage } = require("electron");
-const { createRememberedBrowserLogins, rememberedBrowserLoginOptions } = require("./rememberedBrowserLogins");
+const { createRememberedBrowserLogins, rememberedBrowserLoginOptions, recoveryUrl } = require("./rememberedBrowserLogins");
 const rememberedBrowserLogins = createRememberedBrowserLogins({
   directory: () => path.join(app.getPath("userData"), "remembered-browser-logins"),
   safeStorage, loadSettings, saveSettings,
@@ -24,6 +24,14 @@ const rememberedBrowserLogins = createRememberedBrowserLogins({
     }),
     showContextMenu: items => Menu.buildFromTemplate(items).popup({ window: win }),`);
   main = once(main, "await serverManager.shutdown(cliPath);", "await rememberedBrowserLogins.flush().catch(() => {});\n      await serverManager.shutdown(cliPath);");
+  main = once(main, "function loadServerUrl(win, serverUrl, routePath) {", "function loadServerUrl(win, serverUrl, routePath, loadUrl) {");
+  main = once(main,
+    "  return win.loadURL(routePath ? resolveServerPath(serverUrl, routePath) : serverUrl);",
+    "  const target = loadUrl || (routePath ? resolveServerPath(serverUrl, routePath) : serverUrl);\n  const state = windows.get(win);\n  if (state) state.recoveryLoadUrl = target;\n  return win.loadURL(target);");
+  main = once(main, "    serverUrl: destination ? serverUrl : null,", "    serverUrl: destination ? serverUrl : null,\n    recoveryLoadUrl: destination,");
+  main = once(main,
+    "  loadUrl: (win, serverUrl) => loadServerUrl(win, normalizeUrl(serverUrl)),",
+    "  loadUrl: (win, serverUrl) => loadServerUrl(win, normalizeUrl(serverUrl), undefined, recoveryUrl(serverUrl, win.webContents.getURL(), windows.get(win)?.recoveryLoadUrl)),");
   registry = once(registry, "const DEFAULT_CAP = 10;", `const DEFAULT_CAP = 10;
 const { owningConversation } = require("./rememberedBrowserLogins");
 let registrySeq = 0;`);
