@@ -30,6 +30,29 @@ from starlette.routing import Route
 BRIDGE_PROTOCOL = "omnigent-codex-subscription-bridge-v1"
 
 
+class RpcRejected(RuntimeError):
+    def __init__(self, method: str, error: dict):
+        super().__init__("Codex rejected " + method)
+        self.operation = method
+        self.code = error.get("code")
+        message = str(error.get("message", "")).lower()
+        self.categories = [
+            word
+            for word in (
+                "tool",
+                "schema",
+                "name",
+                "duplicate",
+                "cwd",
+                "properties",
+                "required",
+                "additional",
+                "namespace",
+            )
+            if word in message
+        ]
+
+
 def usage_delta(total: dict, previous: dict) -> dict[str, int]:
     """Anthropic input excludes cache; Codex input includes it."""
 
@@ -76,7 +99,7 @@ class Rpc:
         await self.ws.send(json.dumps({"id": ident, "method": method, "params": params}))
         row = await asyncio.wait_for(future, 30)
         if "error" in row:
-            raise RuntimeError("Codex rejected " + method)
+            raise RpcRejected(method, row["error"])
         return row.get("result", {})
 
     async def close(self):
@@ -438,6 +461,18 @@ class Bridge:
             raise
         except Exception as error:  # noqa: BLE001 — fixed response without upstream payloads
             self.last_error = {"phase": phase, "type": type(error).__name__}
+            if isinstance(error, RpcRejected):
+                self.last_error.update(
+                    operation=error.operation, code=error.code, categories=error.categories
+                )
+                self.last_error["tools"] = [
+                    {
+                        "name": t.get("name"),
+                        "schema_keys": list((t.get("input_schema") or {}).keys()),
+                    }
+                    for t in body.get("tools", [])
+                    if isinstance(t, dict) and isinstance(t.get("input_schema"), dict)
+                ]
             if str(error) in {
                 "Codex rejected initialize",
                 "Codex rejected thread/start",
