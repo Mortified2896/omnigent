@@ -106,7 +106,19 @@ def test_audio_worker_stores_wav_for_exact_completed_response(legacy_backend: st
                     ],
                 ),
             )
-            return SimpleNamespace(data=[item])
+            progress = SimpleNamespace(
+                type="message",
+                status="completed",
+                response_id="answer-17",
+                data=SimpleNamespace(
+                    role="assistant",
+                    content=[{"type": "output_text", "text": "I will check the Mac next."}],
+                ),
+            )
+            work = SimpleNamespace(
+                type="function_call", response_id="answer-17", data=SimpleNamespace(name="shell")
+            )
+            return SimpleNamespace(data=[item, work, progress])
 
         def get_conversation(self, conversation_id: str):
             return SimpleNamespace(session_state={"scheduled_task_audio_backend": legacy_backend})
@@ -138,7 +150,7 @@ def test_audio_worker_stores_wav_for_exact_completed_response(legacy_backend: st
             assert json["voice_profile"] == "kokoro-heart"
             assert json["backend"] == "kokoro"
             assert json["include_timings"] is True
-            assert "current findings" in json["text"]
+            assert json["text"] == "A useful answer with current findings."
             return TtsResponse()
 
     audio_store = AudioStore()

@@ -134,6 +134,45 @@ def _assistant_text(item: Any) -> str:
     return "\n".join(pieces)
 
 
+def _response_markdown(items: list[Any], response_id: str) -> str:
+    """Select the final text run from newest-first items, as the transcript does.
+
+    Earlier assistant messages are progress updates folded into "Worked for".
+    Keep adjacent answer parts, but stop at the work preceding them. Trailing
+    reasoning and turn_diff bookkeeping are not part of the answer either.
+    """
+    response_items = [item for item in items if getattr(item, "response_id", None) == response_id]
+    wrapup_calls = {
+        getattr(item.data, "call_id", None)
+        for item in response_items
+        if getattr(item, "type", None) == "function_call"
+        and getattr(item.data, "name", None) == "turn_diff"
+    } - {None}
+    chunks: list[str] = []
+    for item in response_items:
+        data = getattr(item, "data", None)
+        item_type = getattr(item, "type", "message")
+        if item_type == "resource_event" or getattr(data, "is_meta", False):
+            continue
+        if item_type in {"function_call", "function_call_output"} and (
+            getattr(data, "call_id", None) in wrapup_calls
+        ):
+            continue
+        if not chunks and item_type == "reasoning":
+            continue
+        text = _assistant_text(item)
+        if (
+            item_type == "message"
+            and getattr(item, "status", "completed") == "completed"
+            and not getattr(data, "interrupted", False)
+            and text.strip()
+        ):
+            chunks.append(text)
+        else:
+            break
+    return "\n".join(reversed(chunks))
+
+
 def _response_narration(conversation_store: Any, conversation_id: str) -> tuple[str | None, str]:
     items_page = conversation_store.list_items(
         conversation_id=conversation_id,
@@ -150,12 +189,7 @@ def _response_narration(conversation_store: Any, conversation_id: str) -> tuple[
             break
     if not isinstance(response_id, str) or not response_id:
         return None, ""
-    chunks = [
-        _assistant_text(item)
-        for item in reversed(items)
-        if getattr(item, "response_id", None) == response_id
-    ]
-    return response_id, clean_narration("\n".join(chunk for chunk in chunks if chunk))
+    return response_id, clean_narration(_response_markdown(items, response_id))
 
 
 def _response_narration_for_id(
@@ -170,12 +204,7 @@ def _response_narration_for_id(
         order="desc",
     )
     items = getattr(items_page, "data", items_page) or []
-    chunks = [
-        _assistant_text(item)
-        for item in reversed(items)
-        if getattr(item, "response_id", None) == response_id
-    ]
-    return clean_narration("\n".join(chunk for chunk in chunks if chunk))
+    return clean_narration(_response_markdown(items, response_id))
 
 
 def _parse_speech_response(content_type: str, content: bytes) -> tuple[bytes, bytes | None]:

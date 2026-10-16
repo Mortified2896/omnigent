@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, AuthProvider
 from omnigent.server.generated_audio_playback import _encode_lock
-from omnigent.server.generated_response_audio import _assistant_text, _response_narration_for_id
+from omnigent.server.generated_response_audio import _response_markdown, _response_narration_for_id
 from omnigent.server.generated_response_audio_timings import (
     timings_artifact_key,
     validate_timing_sidecar,
@@ -132,11 +132,7 @@ def register_report_video_routes(
             conversation_store.list_items, conversation_id=session_id, limit=1000, order="desc"
         )
         items = page.data
-        markdown = "\n".join(
-            _assistant_text(item)
-            for item in reversed(items)
-            if getattr(item, "response_id", None) == response_id
-        )
+        markdown = _response_markdown(items, response_id)
         units = []
         try:
             payload = await asyncio.to_thread(

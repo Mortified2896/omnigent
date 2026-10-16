@@ -59,7 +59,25 @@ def test_project_and_publish_require_scoped_access_and_unchanged_audio(
                                 }
                             ],
                         ),
-                    )
+                    ),
+                    SimpleNamespace(
+                        type="function_call",
+                        response_id="report",
+                        data=SimpleNamespace(name="web_search"),
+                    ),
+                    SimpleNamespace(
+                        type="message",
+                        response_id="report",
+                        data=SimpleNamespace(
+                            role="assistant",
+                            content=[
+                                {
+                                    "type": "output_text",
+                                    "text": "# Checking the Mac\nProgress only.",
+                                }
+                            ],
+                        ),
+                    ),
                 ]
             )
 
@@ -121,6 +139,8 @@ def test_project_and_publish_require_scoped_access_and_unchanged_audio(
         )
         project = client.get(base, headers=reader).json()
         assert project["timing"] == "estimated" and project["saved"] is None
+        assert "Checking the Mac" not in json.dumps(project["scenes"])
+        assert "Progress only" not in json.dumps(project["scenes"])
         assert project["audio_sha256"] == hashlib.sha256(original).hexdigest()
         manifest = {
             key: project[key] for key in ("schema_version", "audio_sha256", "duration", "scenes")
