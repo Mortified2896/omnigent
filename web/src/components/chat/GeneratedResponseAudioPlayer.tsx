@@ -348,8 +348,12 @@ export function GeneratedResponseAudioPlayer({
         {estimate && (
           <>
             <p>
-              {estimate.model === "eleven_v4" ? "ElevenLabs V4" : estimate.model} ·{" "}
-              {estimate.narration_characters.toLocaleString()} characters
+              {estimate.model === "eleven_v4_turbo"
+                ? "ElevenLabs V4 Turbo"
+                : estimate.model === "eleven_v4"
+                  ? "ElevenLabs V4"
+                  : estimate.model}{" "}
+              · {estimate.narration_characters.toLocaleString()} characters
               {entry.status === "processing" && ` · ${clock(estimate.elapsed_seconds)} elapsed`}
             </p>
             <p>

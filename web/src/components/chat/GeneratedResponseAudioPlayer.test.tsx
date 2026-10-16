@@ -119,7 +119,7 @@ afterEach(() => {
 describe("GeneratedResponseAudioPlayer", () => {
   it("shows model, report length, progress and a remaining-time range while generating", async () => {
     const generation = {
-      model: "eleven_v4",
+      model: "eleven_v4_turbo",
       narration_characters: 8000,
       completed_chunks: 1,
       total_chunks: 4,
@@ -133,7 +133,7 @@ describe("GeneratedResponseAudioPlayer", () => {
       response({ data: [{ ...readyAudioRow("response-1"), status: "processing", generation }] }),
     );
     const view = renderPlayer();
-    expect(await screen.findByText(/ElevenLabs V4/)).toHaveTextContent("8,000 characters");
+    expect(await screen.findByText(/ElevenLabs V4 Turbo/)).toHaveTextContent("8,000 characters");
     expect(screen.getByText(/min remaining/)).toHaveTextContent(
       "about 2–4 min remaining · 1/4 sections complete",
     );

@@ -6,13 +6,16 @@ import asyncio
 import base64
 import io
 import json
-import re
 import wave
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from websockets.exceptions import ConnectionClosedError
+from websockets.legacy.exceptions import InvalidStatusCode
 
 from omnigent.server.elevenlabs_speech import (
     ElevenLabsSpeechError,
@@ -23,98 +26,194 @@ from omnigent.server.generated_response_audio import GeneratedResponseAudioCoord
 from omnigent.server.generated_response_audio_timings import validate_timing_sidecar
 
 
-def _response(text: str) -> dict[str, object]:
+def _frame(text: str) -> dict[str, object]:
     return {
-        "audio_base64": base64.b64encode(b"\x00\x00" * 2400 * len(text)).decode(),
+        "audio": base64.b64encode(b"\x00\x00" * 2400 * len(text)).decode(),
         "alignment": {
-            "characters": list(text),
-            "character_start_times_seconds": [index / 10 for index in range(len(text))],
-            "character_end_times_seconds": [(index + 1) / 10 for index in range(len(text))],
+            "chars": list(text),
+            "char_start_times_ms": [index * 100 for index in range(len(text))],
+            "char_durations_ms": [100] * len(text),
         },
     }
 
 
-@pytest.mark.parametrize("overlapping_words", [False, True])
-def test_quality_model_and_timings_remain_exact_across_chunks(
-    monkeypatch: pytest.MonkeyPatch, overlapping_words: bool
-):
+def _mock_stream(monkeypatch, frames=None, status=None):
+    sockets = []
+
+    class Socket:
+        def __init__(self):
+            self.sent = []
+            self.frames = []
+
+        async def send(self, value):
+            message = json.loads(value)
+            self.sent.append(message)
+            if message.get("close_socket"):
+                assert self.sent[0] == {"voices": ["voice123"]}
+                text = self.sent[1]["inputs"][0]["text"]
+                assert self.sent[1]["inputs"][0]["voice_id"] == "voice123"
+                assert self.sent[-1] == {"close_socket": True}
+                self.frames = (
+                    frames(text)
+                    if frames
+                    else [
+                        _frame(text[:3]),
+                        _frame(text[3:]),
+                        {"is_final_audio_for_turn": True},
+                        {"is_final": True},
+                    ]
+                )
+
+        async def recv(self):
+            if not self.frames:
+                raise ConnectionClosedError(None, None)
+            return json.dumps(self.frames.pop(0))
+
+    @asynccontextmanager
+    async def connect(uri, **kwargs):
+        parsed = urlparse(uri)
+        assert parsed.scheme == "wss"
+        assert parsed.netloc == "api.elevenlabs.io"
+        assert parsed.path == "/v1/text-to-dialogue/stream-input"
+        assert parse_qs(parsed.query) == {
+            "model_id": ["eleven_v4_turbo"],
+            "output_format": ["pcm_24000"],
+            "sync_alignment": ["true"],
+        }
+        assert kwargs["extra_headers"] == {"xi-api-key": "test-secret"}
+        socket = Socket()
+        sockets.append(socket)
+        if status:
+            raise InvalidStatusCode(status, {})
+        yield socket
+
+    monkeypatch.setattr("omnigent.server.elevenlabs_speech.connect", connect)
+    return sockets
+
+
+def test_turbo_stream_joins_split_words_and_offsets_timings_across_chunks(monkeypatch):
     monkeypatch.setattr("omnigent.server.elevenlabs_speech._CHUNK_LIMIT", 12)
-    requests = []
-
-    def handler(request: httpx.Request):
-        requests.append(request)
-        body = json.loads(request.content)
-        assert body["model_id"] == "eleven_v4"
-        assert "optimize_streaming_latency" not in request.url.params
-        assert request.url.params["output_format"] == "pcm_24000"
-        assert request.headers["xi-api-key"] == "test-secret"
-        assert request.url.host == "api.elevenlabs.io"
-        assert request.url.path == "/v1/text-to-dialogue/with-timestamps"
-        assert body["inputs"][0]["voice_id"] == "voice123"
-        text = body["inputs"][0]["text"]
-        data = _response(text)
-        if overlapping_words:
-            first, second = list(re.finditer(r"\S+", text))[:2]
-            data["alignment"]["character_end_times_seconds"][first.end() - 1] = (
-                data["alignment"]["character_start_times_seconds"][second.start()] + 0.04
-            )
-        return httpx.Response(200, json=data)
-
+    sockets = _mock_stream(monkeypatch)
     narration = "First news. Next news. Last news."
     progress = []
 
     async def note(characters, completed, total):
         progress.append((characters, completed, total))
 
-    async def run():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await generate_elevenlabs_speech(
-                client,
-                api_key="test-secret",
-                voice_id="voice123",
-                narration=narration,
-                on_progress=note,
-            )
-
-    audio, timings, duration, rate = asyncio.run(run())
-    assert len(requests) > 1
-    assert progress[-1] == (len(narration), len(requests), len(requests))
-    assert (
-        "".join(json.loads(request.content)["inputs"][0]["text"] for request in requests)
-        == narration
+    audio, timings, duration, rate = asyncio.run(
+        generate_elevenlabs_speech(
+            api_key="test-secret",
+            voice_id="voice123",
+            narration=narration,
+            on_progress=note,
+        )
     )
+    assert len(sockets) > 1
+    assert progress[-1] == (len(narration), len(sockets), len(sockets))
+    assert "".join(socket.sent[1]["inputs"][0]["text"] for socket in sockets) == narration
     assert rate == 24000
     with wave.open(io.BytesIO(audio)) as wav:
         assert wav.getnframes() / wav.getframerate() == duration
-    assert timings is not None
     sidecar = validate_timing_sidecar(
-        timings, audio=audio, narration=narration, expected_duration_seconds=duration
+        timings,
+        audio=audio,
+        narration=narration,
+        expected_duration_seconds=duration,
     )
+    assert sidecar["engine"] == "elevenlabs/eleven_v4_turbo"
     assert [unit["text"] for unit in sidecar["units"]] == narration.split()
-    if overlapping_words:
-        assert sidecar["units"][0]["end_seconds"] > sidecar["units"][1]["start_seconds"]
+    assert sidecar["units"][1]["start_seconds"] == pytest.approx(0.6)
+    assert sidecar["units"][-1]["end_seconds"] == pytest.approx(len(narration) / 10)
 
 
 @pytest.mark.parametrize("status", [401, 429, 503])
-def test_provider_failure_is_not_retried_or_exposed(status: int):
-    calls = []
-
-    def handler(request: httpx.Request):
-        calls.append(request)
-        return httpx.Response(status, json={"detail": "sensitive provider response"})
-
-    async def run():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            await generate_elevenlabs_speech(
-                client, api_key="test-secret", voice_id="voice123", narration="News."
-            )
-
+def test_provider_failure_is_not_retried_or_exposed(monkeypatch, status):
+    sockets = _mock_stream(monkeypatch, status=status)
     with pytest.raises(ElevenLabsSpeechError, match=f"^elevenlabs_http_{status}$"):
-        asyncio.run(run())
-    assert len(calls) == 1
+        asyncio.run(
+            generate_elevenlabs_speech(
+                api_key="test-secret",
+                voice_id="voice123",
+                narration="News.",
+            )
+        )
+    assert len(sockets) == 1
+
+
+@pytest.mark.parametrize(
+    "frames,code",
+    [
+        (lambda text: [_frame(text)], "elevenlabs_unavailable"),
+        (
+            lambda text: [_frame(text), {"error": "secret provider detail"}],
+            "elevenlabs_generation_failed",
+        ),
+        (lambda text: [{"audio": "bad-base64"}], "elevenlabs_invalid_audio"),
+        (lambda text: [{"is_final": True}], "elevenlabs_invalid_audio"),
+    ],
+)
+def test_partial_and_invalid_audio_are_never_published_or_retried(monkeypatch, frames, code):
+    sockets = _mock_stream(monkeypatch, frames=frames)
+    with pytest.raises(ElevenLabsSpeechError, match=f"^{code}$"):
+        asyncio.run(
+            generate_elevenlabs_speech(
+                api_key="test-secret",
+                voice_id="voice123",
+                narration="News.",
+            )
+        )
+    assert len(sockets) == 1
+
+
+def test_alignment_clock_is_independent_of_pcm_packet_boundaries(monkeypatch):
+    def frames(text):
+        first, second = _frame(text[:3]), _frame(text[3:])
+        # Provider may attach a segment's alignment after its audio has already
+        # arrived, including a split in the middle of a word.
+        first["audio"] = base64.b64encode(b"\x00\x00" * 2400).decode()
+        second["audio"] = base64.b64encode(b"\x00\x00" * 2400 * (len(text) - 1)).decode()
+        return [first, second, {"is_final": True}]
+
+    _mock_stream(monkeypatch, frames=frames)
+    narration = "First news."
+    audio, timings, duration, _ = asyncio.run(
+        generate_elevenlabs_speech(
+            api_key="test-secret",
+            voice_id="voice123",
+            narration=narration,
+        )
+    )
+    sidecar = validate_timing_sidecar(
+        timings,
+        audio=audio,
+        narration=narration,
+        expected_duration_seconds=duration,
+    )
+    assert sidecar["units"][0]["end_seconds"] == pytest.approx(0.5)
+    assert sidecar["units"][1]["start_seconds"] == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize("alignment", [None, {}, {"chars": ["wrong"]}])
+def test_missing_or_invalid_stream_alignment_keeps_playable_audio(monkeypatch, alignment):
+    def frames(text):
+        frame = _frame(text)
+        frame["alignment"] = alignment
+        return [frame, {"is_final": True}]
+
+    _mock_stream(monkeypatch, frames=frames)
+    audio, timings, duration, rate = asyncio.run(
+        generate_elevenlabs_speech(
+            api_key="test-secret",
+            voice_id="voice123",
+            narration="News.",
+        )
+    )
+    assert audio.startswith(b"RIFF") and duration > 0 and rate == 24000
+    assert timings is None
 
 
 def test_keychain_audio_runs_without_local_tts(monkeypatch: pytest.MonkeyPatch):
+    _mock_stream(monkeypatch)
     secret_reads = []
 
     def load_secret(name: str):
@@ -142,11 +241,7 @@ def test_keychain_audio_runs_without_local_tts(monkeypatch: pytest.MonkeyPatch):
     )
 
     async def run():
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(
-                lambda request: httpx.Response(200, json=_response("News."))
-            )
-        ) as client:
+        async with httpx.AsyncClient() as client:
             coordinator = GeneratedResponseAudioCoordinator(
                 audio_store=audio_store,
                 conversation_store=conversation_store,

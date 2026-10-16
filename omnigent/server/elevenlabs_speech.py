@@ -1,7 +1,8 @@
-"""Eleven v4 narration with WAV audio and optional original-text word timings."""
+"""Eleven v4 Turbo narration with WAV audio and original-text word timings."""
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -13,12 +14,14 @@ import wave
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import httpx
+from websockets.exceptions import WebSocketException
+from websockets.legacy.client import connect
+from websockets.legacy.exceptions import InvalidStatusCode
 
-ELEVENLABS_MODEL = "eleven_v4"
+ELEVENLABS_MODEL = "eleven_v4_turbo"
 ELEVENLABS_VOICE_PREFIX = "elevenlabs:"
 _SAMPLE_RATE = 24_000
-_CHUNK_LIMIT = 2_000  # Dialogue endpoint's documented reliable request size.
+_CHUNK_LIMIT = 2_000
 
 
 class ElevenLabsSpeechError(Exception):
@@ -84,15 +87,105 @@ def _units(
         return None
 
 
+async def _stream_chunk(api_key: str, voice_id: str, text: str) -> tuple[bytes, dict[str, Any]]:
+    """Collect one flushed dialogue stream, requiring the provider's final frame."""
+    pcm_parts = []
+    alignment: dict[str, Any] = {
+        "characters": [],
+        "character_start_times_seconds": [],
+        "character_end_times_seconds": [],
+    }
+    sample_count = 0
+    alignment_offset = 0.0
+    valid_alignment = True
+    try:
+        async with asyncio.timeout(180):
+            async with connect(
+                "wss://api.elevenlabs.io/v1/text-to-dialogue/stream-input"
+                f"?model_id={ELEVENLABS_MODEL}&output_format=pcm_24000&sync_alignment=true",
+                extra_headers={"xi-api-key": api_key},
+                open_timeout=20,
+                close_timeout=5,
+                max_size=8 * 1024 * 1024,
+            ) as socket:
+                await socket.send(json.dumps({"voices": [voice_id]}))
+                await socket.send(json.dumps({"inputs": [{"text": text, "voice_id": voice_id}]}))
+                await socket.send(json.dumps({"close_socket": True}))
+                while True:
+                    try:
+                        data = json.loads(await asyncio.wait_for(socket.recv(), timeout=60))
+                        if not isinstance(data, dict):
+                            raise ValueError("invalid frame")
+                        if data.get("error"):
+                            raise ElevenLabsSpeechError("elevenlabs_generation_failed")
+                        pcm = base64.b64decode(data.get("audio") or "", validate=True)
+                        if len(pcm) % 2:
+                            raise ValueError("invalid PCM")
+                    except (ValueError, TypeError, binascii.Error):
+                        raise ElevenLabsSpeechError("elevenlabs_invalid_audio") from None
+                    part = data.get("alignment")
+                    if part is not None:
+                        try:
+                            chars = part["chars"]
+                            starts = part["char_start_times_ms"]
+                            durations = part["char_durations_ms"]
+                            if not all(
+                                isinstance(values, list) for values in (chars, starts, durations)
+                            ):
+                                raise ValueError("invalid alignment")
+                            if len(chars) != len(starts) or len(chars) != len(durations):
+                                raise ValueError("invalid alignment")
+                            if any(
+                                isinstance(value, bool)
+                                or not isinstance(value, (int, float))
+                                or not math.isfinite(value)
+                                or value < 0
+                                for value in [*starts, *durations]
+                            ):
+                                raise ValueError("invalid alignment")
+                            # Alignment segments and PCM packets have independent
+                            # boundaries. Advance on alignment durations, never on
+                            # the size of the audio packet carrying the alignment.
+                            offset = alignment_offset
+                            alignment["characters"].extend(chars)
+                            alignment["character_start_times_seconds"].extend(
+                                offset + start / 1000 for start in starts
+                            )
+                            alignment["character_end_times_seconds"].extend(
+                                offset + (start + duration) / 1000
+                                for start, duration in zip(starts, durations, strict=True)
+                            )
+                            if starts:
+                                alignment_offset += (
+                                    max(
+                                        start + duration
+                                        for start, duration in zip(starts, durations, strict=True)
+                                    )
+                                    / 1000
+                                )
+                        except (KeyError, ValueError, TypeError):
+                            valid_alignment = False
+                    pcm_parts.append(pcm)
+                    sample_count += len(pcm) // 2
+                    if data.get("is_final") is True:
+                        break
+    except InvalidStatusCode as exc:
+        raise ElevenLabsSpeechError(f"elevenlabs_http_{exc.status_code}") from None
+    except (WebSocketException, OSError, TimeoutError):
+        raise ElevenLabsSpeechError("elevenlabs_unavailable") from None
+    if not sample_count:
+        raise ElevenLabsSpeechError("elevenlabs_invalid_audio")
+    return b"".join(pcm_parts), alignment if valid_alignment else {}
+
+
 async def generate_elevenlabs_speech(
-    client: httpx.AsyncClient,
     *,
     api_key: str,
     voice_id: str,
     narration: str,
     on_progress: Callable[[int, int, int], Awaitable[None]] | None = None,
 ) -> tuple[bytes, bytes | None, float, int]:
-    """Make one request per chunk, with no automatic retry or model fallback."""
+    """Make one stream per chunk, with no automatic retry or model fallback."""
     if not api_key:
         raise ElevenLabsSpeechError("elevenlabs_key_missing")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", voice_id):
@@ -106,30 +199,9 @@ async def generate_elevenlabs_speech(
     sample_count = 0
     chunks = _chunks(narration)
     for index, text in enumerate(chunks):
-        try:
-            response = await client.post(
-                "https://api.elevenlabs.io/v1/text-to-dialogue/with-timestamps",
-                headers={"xi-api-key": api_key},
-                params={"output_format": "pcm_24000"},
-                json={
-                    "inputs": [{"text": text, "voice_id": voice_id}],
-                    "model_id": ELEVENLABS_MODEL,
-                },
-                follow_redirects=False,
-            )
-        except httpx.HTTPError:
-            raise ElevenLabsSpeechError("elevenlabs_unavailable") from None
-        if response.status_code != 200:
-            raise ElevenLabsSpeechError(f"elevenlabs_http_{response.status_code}")
-        try:
-            data = response.json()
-            pcm = base64.b64decode(data["audio_base64"], validate=True)
-            if not pcm or len(pcm) % 2:
-                raise ValueError("invalid PCM")
-        except (ValueError, TypeError, KeyError, binascii.Error):
-            raise ElevenLabsSpeechError("elevenlabs_invalid_audio") from None
+        pcm, alignment = await _stream_chunk(api_key, voice_id, text)
         chunk_units = _units(
-            data.get("alignment"),
+            alignment,
             text,
             narration_offset,
             sample_count / _SAMPLE_RATE,
@@ -158,7 +230,7 @@ async def generate_elevenlabs_speech(
         timings = json.dumps(
             {
                 "schema_version": 1,
-                "engine": "elevenlabs/eleven_v4",
+                "engine": f"elevenlabs/{ELEVENLABS_MODEL}",
                 "audio_sha256": hashlib.sha256(payload).hexdigest(),
                 "narration_sha256": hashlib.sha256(narration.encode()).hexdigest(),
                 "duration_seconds": duration,

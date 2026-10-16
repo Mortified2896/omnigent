@@ -29,6 +29,7 @@ from omnigent.server.audio_generation_estimate import (
     save_receipt,
 )
 from omnigent.server.elevenlabs_speech import (
+    ELEVENLABS_MODEL,
     ELEVENLABS_VOICE_PREFIX,
     ElevenLabsSpeechError,
     generate_elevenlabs_speech,
@@ -430,7 +431,7 @@ class GeneratedResponseAudioCoordinator:
                 if entry is None:
                     raise _PostprocessError("audio_record_missing")
                 model = (
-                    "eleven_v4"
+                    ELEVENLABS_MODEL
                     if entry.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX)
                     else SCHEDULED_AUDIO_BACKEND
                 )
@@ -458,7 +459,7 @@ class GeneratedResponseAudioCoordinator:
                         )
 
                 await note_progress(
-                    0, 0, len(narration_chunks(narration)) if model == "eleven_v4" else 1
+                    0, 0, len(narration_chunks(narration)) if model == ELEVENLABS_MODEL else 1
                 )
                 assert self._client is not None
                 if entry.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX):
@@ -470,7 +471,6 @@ class GeneratedResponseAudioCoordinator:
                         raise _PostprocessError("elevenlabs_key_unavailable") from None
                     try:
                         payload, timing_payload, duration, rate = await generate_elevenlabs_speech(
-                            self._client,
                             api_key=api_key or "",
                             voice_id=entry.voice_profile.removeprefix(ELEVENLABS_VOICE_PREFIX),
                             narration=narration,
@@ -481,8 +481,9 @@ class GeneratedResponseAudioCoordinator:
                     finally:
                         api_key = None
                     _logger.info(
-                        "Scheduled audio response=%s backend=elevenlabs/eleven_v4",
+                        "Scheduled audio response=%s backend=elevenlabs/%s",
                         work.response_id,
+                        ELEVENLABS_MODEL,
                     )
                 else:
                     if not self.tts_url:

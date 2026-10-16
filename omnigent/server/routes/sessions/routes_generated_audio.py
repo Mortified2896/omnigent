@@ -19,7 +19,7 @@ from omnigent.server.audio_generation_estimate import (
     read_receipt,
 )
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, AuthProvider
-from omnigent.server.elevenlabs_speech import ELEVENLABS_VOICE_PREFIX
+from omnigent.server.elevenlabs_speech import ELEVENLABS_MODEL, ELEVENLABS_VOICE_PREFIX
 from omnigent.server.generated_audio_playback import mobile_playback_copy
 from omnigent.server.generated_response_audio import (
     GeneratedResponseAudioCoordinator,
@@ -126,7 +126,7 @@ def register_generated_audio_routes(
             if row.status not in {"pending", "processing"}:
                 continue
             model = (
-                "eleven_v4"
+                ELEVENLABS_MODEL
                 if row.voice_profile.startswith(ELEVENLABS_VOICE_PREFIX)
                 else SCHEDULED_AUDIO_BACKEND
             )

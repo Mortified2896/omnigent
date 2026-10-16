@@ -21,6 +21,15 @@ task, preserve unrelated instructions and settings, then acknowledge a successfu
 save. Editing the automation does not rewrite earlier reports. The dispatched
 context is not stored back into the automation's saved prompt.
 
+ElevenLabs report narration uses **V4 Turbo** (`eleven_v4_turbo`) through the
+Text to Dialogue WebSocket. It keeps the selected voice and report text, saves
+WAV audio, and includes word timings when the provider alignment matches the
+original narration. Existing recordings keep their audio. Each text chunk is
+generated once; failures do not automatically retry or fall back to a more
+expensive model. [ElevenLabs pricing](https://elevenlabs.io/pricing/api) lists
+V4 Turbo at half the standard V4 API rate, including on Starter; actual usage
+is metered by the subscription account.
+
 Codex reset reporting should use the host's read-only
 `/v1/hosts/{host_id}/codex-rate-limits` response, including its actual window
 duration and `resets_at` timestamp. Do not assume every account has the same

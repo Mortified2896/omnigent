@@ -98,7 +98,7 @@ def test_list_and_fetch_audio_by_exact_response(db_uri: str, tmp_path, monkeypat
             for row in client.get(url, headers=headers).json()["data"]
             if row["response_id"] == "answer-2"
         )
-        assert queued["generation"]["model"] == "eleven_v4"
+        assert queued["generation"]["model"] == "eleven_v4_turbo"
         assert queued["generation"]["elapsed_seconds"] == 0
         assert audio_store.claim_pending(conversation.id, "answer-2")
         processing = next(
