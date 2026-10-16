@@ -160,6 +160,7 @@ from omnigent.server.routes._content_type import (
 )
 from omnigent.server.routes._errors import session_not_found as _session_not_found
 from omnigent.server.routes._origin import require_trusted_origin
+from omnigent.stores.session_read_state import SessionReadStateStore
 from omnigent.util.cost_plan import (
     reserved_cost_control_keys,
 )
@@ -881,6 +882,10 @@ def create_sessions_router(
         ``/sessions`` endpoints.
     """
     router = APIRouter()
+    storage_location = getattr(conversation_store, "storage_location", None)
+    read_state_store = (
+        SessionReadStateStore(storage_location) if isinstance(storage_location, str) else None
+    )
 
     from omnigent.server.routes.sessions.routes_agent import register_agent_routes
     from omnigent.server.routes.sessions.routes_browser import register_browser_routes
@@ -898,6 +903,7 @@ def create_sessions_router(
 
     register_core_routes(
         router,
+        read_state_store=read_state_store,
         conversation_store=conversation_store,
         agent_store=agent_store,
         file_store=file_store,
@@ -980,6 +986,7 @@ def create_sessions_router(
 
     register_events_routes(
         router,
+        read_state_store=read_state_store,
         conversation_store=conversation_store,
         agent_store=agent_store,
         file_store=file_store,

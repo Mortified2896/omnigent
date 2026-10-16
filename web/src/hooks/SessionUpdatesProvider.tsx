@@ -19,6 +19,7 @@ import { PINNED_CONVERSATIONS_KEY, type PinnedConversationsResult } from "./useC
 
 import { type ReactNode, useCallback, useContext, useEffect, useRef } from "react";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { seedReadState } from "@/hooks/useUnseenConversations";
 import { getCurrentUserId } from "@/lib/identity";
 import { useActiveConversationId } from "@/hooks/useActiveConversationId";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
@@ -395,6 +396,7 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
           return;
         case "snapshot":
         case "changed": {
+          seedReadState(frame.items);
           syncCommentsFingerprints(frame.items);
           if (frame.type === "snapshot") {
             // A snapshot restates the full watch-set, so fingerprints for

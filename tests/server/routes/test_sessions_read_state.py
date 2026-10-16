@@ -5,9 +5,10 @@
   * ``viewer_last_seen`` / ``viewer_unread`` embedded per-user in the
     ``GET /v1/sessions`` list items (built by ``_build_session_list_item``).
 
-Read state is per-user and in-memory on the server (module-level dicts in
-``omnigent.server.routes.sessions``); each test resets those globals so
-state doesn't leak between cases. Runs without auth (``permission_store``
+These lightweight stub-store tests exercise the in-memory fallback. Production
+uses durable database receipts; ``test_session_updates_ws`` and the store tests
+cover cross-device delivery and restart persistence. Each test resets the fallback
+so state does not leak between cases. Runs without auth (``permission_store``
 is ``None``), so the caller is the single-user ``None`` identity and the
 PUT's access check short-circuits.
 """

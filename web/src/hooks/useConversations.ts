@@ -228,9 +228,9 @@ export interface Conversation {
   /**
    * The requesting user's "last seen" wall-clock baseline (seconds) for
    * this session, or null/undefined when they've never seen it. Per-viewer,
-   * served by the per-user read-state cache; the sidebar's unread dot shows
+   * persisted in the workspace database; the sidebar's unread dot shows
    * when `updated_at > viewer_last_seen` and the session is finished. The
-   * client seeds {@link useUnseenConversations}'s mirror from this on load.
+   * client merges this into {@link useUnseenConversations}'s mirror live.
    */
   viewer_last_seen?: number | null;
   /**
@@ -238,6 +238,7 @@ export interface Conversation {
    * Per-viewer; lifts the active-row dot suppression on the client.
    */
   viewer_unread?: boolean;
+  viewer_read_version?: number;
   /**
    * Excerpt of the chat content that matched the current `search_query`,
    * centered on the match with `…` marking elided ends. Present only on

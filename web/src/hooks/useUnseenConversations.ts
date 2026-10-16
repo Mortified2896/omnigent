@@ -1,22 +1,6 @@
-// Per-user tracking of which conversations have unseen messages.
-//
-// The "last seen" baseline (a wall-clock second per conversation) and the
-// explicit "marked unread" override live in THIS BROWSER (localStorage),
-// mirrored best-effort to the server. The server's copy is in-memory and
-// per-replica: under replica sharding the list/`/updates` request can land
-// on a pod that never saw the user's read-state PUT, so its
-// `viewer_last_seen` / `viewer_unread` fields can be null even for a
-// session the user has read. The local copy is therefore the durable
-// source; the server seed only ever *raises* a baseline (max-merge), which
-// also picks up newer reads from the user's other devices when the serving
-// replica happens to have them. Cross-device unread is best-effort by
-// design.
-//
-// A conversation is "unseen" when its server-side updated_at exceeds the
-// stored baseline. A conversation with no baseline anywhere seeds to its
-// updated_at at load ("read as of load") — pod-independent, so the
-// automatic dot for a turn finishing after load always works, and a
-// null server seed can no longer permanently disable a row's dot.
+// Per-viewer read receipts: the server persists the shared copy and the browser
+// keeps an optimistic mirror. Every list/stream update can advance that mirror;
+// pending local actions stay protected until their serialized PUT is committed.
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
@@ -36,11 +20,21 @@ function notifySubscribers(): void {
 
 type LastSeenMap = Record<string, number>;
 
-// The browser-durable read-state, hydrated from localStorage at module
-// load, raised (never lowered) by the server seed, and updated
-// optimistically on each mutation before the best-effort PUT lands.
+// The browser mirror is hydrated at load, merged with shared receipts, and
+// updated optimistically before the durable outgoing queue is flushed.
 let lastSeenMap: LastSeenMap = {};
 const explicitlyUnread = new Set<string>();
+interface ReadWrite {
+  last_seen: number;
+  unread: boolean;
+}
+const pendingWrites = new Map<string, ReadWrite>();
+const syncing = new Set<string>();
+const serverVersions = new Map<string, number>();
+// A poll started before a successful PUT may still finish afterwards.
+const acknowledgedVersions = new Map<string, number>();
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
+let retryDelay = 1_000;
 
 // localStorage persistence. Best-effort everywhere: storage can be
 // missing (SSR), full, or blocked — the in-memory mirror always works.
@@ -59,6 +53,16 @@ function hydrateFromStorage(): void {
     if (typeof lastSeen === "object" && lastSeen !== null) {
       for (const [id, value] of Object.entries(lastSeen)) {
         if (typeof value === "number") lastSeenMap[id] = value;
+      }
+    }
+    const versions = (parsed as { versions?: Record<string, number> }).versions;
+    for (const [id, version] of Object.entries(versions ?? {})) {
+      if (Number.isSafeInteger(version) && version > 0) serverVersions.set(id, version);
+    }
+    const pending = (parsed as { pending?: Record<string, ReadWrite> }).pending;
+    for (const [id, write] of Object.entries(pending ?? {})) {
+      if (Number.isFinite(write?.last_seen) && typeof write?.unread === "boolean") {
+        pendingWrites.set(id, write);
       }
     }
     const unread = (parsed as { unread?: unknown }).unread;
@@ -80,7 +84,14 @@ function persistToStorage(): void {
     }
     globalThis.localStorage?.setItem(
       STORAGE_KEY,
-      JSON.stringify({ lastSeen: Object.fromEntries(entries), unread: [...explicitlyUnread] }),
+      JSON.stringify({
+        lastSeen: Object.fromEntries(entries),
+        unread: [...explicitlyUnread],
+        versions: Object.fromEntries(
+          entries.flatMap(([id]) => (serverVersions.has(id) ? [[id, serverVersions.get(id)]] : [])),
+        ),
+        pending: Object.fromEntries(pendingWrites),
+      }),
     );
   } catch {
     // Quota/blocked storage → in-memory state still serves this tab.
@@ -89,11 +100,7 @@ function persistToStorage(): void {
 
 hydrateFromStorage();
 
-// Sessions already seeded from the list. Seeding is once-per-session: the
-// first time a conversation is seen we copy its server `viewer_*` into the
-// mirror, then ignore later list values so an in-flight poll can't clobber a
-// local optimistic write. Cross-device changes after first load surface on a
-// reload (a deliberate Phase-1 scope: live merge is a follow-up).
+// Tracks first discovery only; subsequent server receipts are merged live.
 const seeded = new Set<string>();
 
 // Until the first seed runs we don't know the server's baselines, so the
@@ -107,24 +114,65 @@ export function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-/**
- * Pushes the calling user's read-state for one conversation to the server.
- * Best-effort and fire-and-forget: a failed PUT leaves the optimistic local
- * mirror in place, which the next mutation or a reload reconciles. Skips the
- * call when there's no baseline to report (nothing meaningful to sync).
- */
-async function syncReadState(conversationId: string): Promise<void> {
+/** Queue the latest local intent before starting its per-conversation writer. */
+function syncReadState(conversationId: string): void {
   const lastSeen = lastSeenMap[conversationId];
   if (lastSeen === undefined) return;
+  pendingWrites.set(conversationId, {
+    last_seen: lastSeen,
+    unread: explicitlyUnread.has(conversationId),
+  });
+  persistToStorage();
+  void flushReadState(conversationId);
+}
+
+/** Serialize PUTs so a slow older request cannot undo a newer read/unread action. */
+async function flushReadState(conversationId: string): Promise<void> {
+  if (syncing.has(conversationId)) return;
+  syncing.add(conversationId);
   try {
-    await authenticatedFetch(`/v1/sessions/${encodeURIComponent(conversationId)}/read-state`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ last_seen: lastSeen, unread: explicitlyUnread.has(conversationId) }),
-    });
+    let write: ReadWrite | undefined;
+    while ((write = pendingWrites.get(conversationId))) {
+      // Each receipt must commit before sending the next action for this chat.
+      // oxlint-disable-next-line no-await-in-loop
+      const response = await authenticatedFetch(
+        `/v1/sessions/${encodeURIComponent(conversationId)}/read-state`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(write),
+          keepalive: true,
+        },
+      );
+      if (!response.ok) throw new Error(`Read receipt failed (${response.status})`);
+      const version = Number(response.headers?.get("X-Omnigent-Read-Version"));
+      if (Number.isSafeInteger(version) && version > 0) {
+        acknowledgedVersions.set(conversationId, version);
+      }
+      if (pendingWrites.get(conversationId) === write) pendingWrites.delete(conversationId);
+      persistToStorage();
+    }
   } catch {
-    // Network/auth errors must not break the UI; local state stays.
+    // Retain the queue and back off while the server or network recovers.
+    if (retryTimer === undefined) {
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        retryPendingWrites();
+      }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30_000);
+    }
+  } finally {
+    syncing.delete(conversationId);
+    if (pendingWrites.size === 0) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+      retryDelay = 1_000;
+    }
   }
+}
+
+function retryPendingWrites(): void {
+  for (const id of pendingWrites.keys()) void flushReadState(id);
 }
 
 /** The read-state fields the seed reads off a conversation list item. */
@@ -132,42 +180,53 @@ export interface ReadStateSeed {
   id: string;
   viewer_last_seen?: number | null;
   viewer_unread?: boolean;
+  viewer_read_version?: number;
   updated_at?: number;
   labels?: Record<string, string>;
 }
 
-/**
- * Seeds the local mirror from the conversation list (the server's per-viewer
- * read path). Once-per-session: a conversation is merged the first time it
- * appears, then ignored, so an in-flight list poll can't clobber a local
- * optimistic write. The merge is max(localStorage baseline, server value) —
- * last-seen is monotonic, so taking the max is always safe and picks up a
- * newer read from another device when the serving replica has it. A session
- * with no baseline on either side seeds to its `updated_at` ("read as of
- * load"): pod-independent, so a replica that can't see the user's read-state
- * can never freeze a row's dot off. Flips {@link hydrated} on the first call
- * (even for an empty list) so the automatic mark-seen can resume.
- */
+/** Merge fresh shared receipts while preserving optimistic, uncommitted actions. */
 export function seedReadState(conversations: readonly ReadStateSeed[]): void {
   let changed = false;
   for (const conv of conversations) {
-    if (seeded.has(conv.id)) continue;
+    const firstSeed = !seeded.has(conv.id);
     seeded.add(conv.id);
+    if (pendingWrites.has(conv.id)) continue;
     const local = lastSeenMap[conv.id];
     const server = typeof conv.viewer_last_seen === "number" ? conv.viewer_last_seen : undefined;
-    let baseline =
-      local !== undefined && server !== undefined ? Math.max(local, server) : (local ?? server);
+    const version = conv.viewer_read_version ?? 0;
+    const knownVersion = serverVersions.get(conv.id) ?? 0;
+    const acknowledged = acknowledgedVersions.get(conv.id) ?? 0;
+    let baseline = local;
+    let unread = explicitlyUnread.has(conv.id);
+    if (version > knownVersion && version >= acknowledged && server !== undefined) {
+      // Revisions order intentional Mark unread actions too (which lower last_seen).
+      baseline = conv.viewer_unread ? server : Math.max(local ?? server, server);
+      unread = conv.viewer_unread ?? false;
+      serverVersions.set(conv.id, version);
+      changed = true;
+    } else if (version === 0 && knownVersion === 0 && acknowledged === 0) {
+      // Compatibility with older servers: a newer read can still merge live.
+      baseline =
+        local !== undefined && server !== undefined ? Math.max(local, server) : (local ?? server);
+      if (
+        conv.viewer_unread &&
+        (firstSeed || (server !== undefined && (local === undefined || server >= local)))
+      )
+        unread = true;
+      else if (!conv.viewer_unread && server !== undefined && local !== undefined && server > local)
+        unread = false;
+    }
     if (baseline === undefined && typeof conv.updated_at === "number") {
-      // A report completed while the app was closed still needs delivery.
-      // Ordinary chats retain the existing read-as-of-load behavior.
       baseline = conv.labels?.["omnigent.scheduled_task_id"] ? 0 : conv.updated_at;
     }
     if (baseline !== undefined && baseline !== local) {
       lastSeenMap[conv.id] = baseline;
       changed = true;
     }
-    if (conv.viewer_unread && !explicitlyUnread.has(conv.id)) {
-      explicitlyUnread.add(conv.id);
+    if (unread !== explicitlyUnread.has(conv.id)) {
+      if (unread) explicitlyUnread.add(conv.id);
+      else explicitlyUnread.delete(conv.id);
       changed = true;
     }
   }
@@ -179,6 +238,7 @@ export function seedReadState(conversations: readonly ReadStateSeed[]): void {
     persistToStorage();
     notifySubscribers();
   }
+  retryPendingWrites();
 }
 
 /**
@@ -194,6 +254,16 @@ export function useSeedReadState(conversations: readonly ReadStateSeed[] | undef
     if (conversations === undefined) return;
     seedReadState(conversations);
   }, [conversations]);
+  useEffect(() => {
+    window.addEventListener("online", retryPendingWrites);
+    window.addEventListener("focus", retryPendingWrites);
+    document.addEventListener("visibilitychange", retryPendingWrites);
+    return () => {
+      window.removeEventListener("online", retryPendingWrites);
+      window.removeEventListener("focus", retryPendingWrites);
+      document.removeEventListener("visibilitychange", retryPendingWrites);
+    };
+  }, []);
 }
 
 /**
@@ -205,6 +275,13 @@ export function resetReadStateForTests(): void {
   lastSeenMap = {};
   explicitlyUnread.clear();
   seeded.clear();
+  pendingWrites.clear();
+  syncing.clear();
+  serverVersions.clear();
+  acknowledgedVersions.clear();
+  clearTimeout(retryTimer);
+  retryTimer = undefined;
+  retryDelay = 1_000;
   hydrated = false;
   try {
     globalThis.localStorage?.removeItem(STORAGE_KEY);
@@ -368,6 +445,7 @@ export function isConversationUnseen(
 /** True when the app window currently has focus (SSR-safe default true). */
 function windowHasFocus(): boolean {
   if (typeof document === "undefined") return true;
+  if (document.visibilityState === "hidden") return false;
   return typeof document.hasFocus === "function" ? document.hasFocus() : true;
 }
 
@@ -389,6 +467,16 @@ export function useMarkConversationSeen(
   conversationId: string | undefined,
   updatedAt: number | undefined,
 ): void {
+  // A child effect may run before AppShell's first seed. Retry the active read
+  // when hydration completes, even if id and updatedAt have not changed.
+  const ready = useSyncExternalStore(
+    (onChange) => {
+      subscribers.add(onChange);
+      return () => subscribers.delete(onChange);
+    },
+    () => hydrated,
+    () => false,
+  );
   // Opening a thread is reading it, so clear any explicit-unread
   // override before the mark-seen below runs (and runs first, so
   // markConversationSeen isn't no-op'd by a stale override). Keyed on
@@ -421,12 +509,16 @@ export function useMarkConversationSeen(
     };
     markIfFocused();
     window.addEventListener("focus", markIfFocused);
+    window.addEventListener("pageshow", markIfFocused);
+    document.addEventListener("visibilitychange", markIfFocused);
     return () => {
       window.removeEventListener("focus", markIfFocused);
+      window.removeEventListener("pageshow", markIfFocused);
+      document.removeEventListener("visibilitychange", markIfFocused);
       // Navigation away normally happens via user interaction (focused);
       // an unmount in a blurred window (e.g. the session deleted from
       // another client) must not silently mark the thread read.
       markIfFocused();
     };
-  }, [conversationId, updatedAt]);
+  }, [conversationId, updatedAt, ready]);
 }

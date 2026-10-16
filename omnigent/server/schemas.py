@@ -2800,10 +2800,9 @@ class SessionListItem(BaseModel):
     :param viewer_last_seen: The *requesting user's* "last seen"
         wall-clock baseline in seconds for this session, or ``None``
         when they have never seen it. Per-viewer (built from the
-        server's in-memory per-user read-state, written by
-        ``PUT /v1/sessions/{id}/read-state``); the unread dot shows
-        when ``updated_at > viewer_last_seen`` and the session is
-        finished. In-memory only — resets on a server restart.
+        workspace database, written by ``PUT /v1/sessions/{id}/read-state``);
+        the unread dot shows when ``updated_at > viewer_last_seen`` and the
+        session is finished. Retained across workers and restarts.
     :param viewer_unread: Whether the *requesting user* explicitly
         marked this session unread. Per-viewer; lifts the active-row
         dot suppression on the client. ``False`` by default.
@@ -2839,6 +2838,7 @@ class SessionListItem(BaseModel):
     comments_updated_at: int | None = None
     viewer_last_seen: int | None = None
     viewer_unread: bool = False
+    viewer_read_version: int = 0
     search_snippet: str | None = None
     parent_session_id: str | None = None
     # First-class project this session is filed under, or ``None`` when

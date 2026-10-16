@@ -1096,6 +1096,7 @@ def _build_session_list_item(
     pending_count: int,
     child_session_ids: list[str],
     comments_fingerprint: CommentsFingerprint | None,
+    read_state: tuple[int | None, bool, int] | None = None,
 ) -> SessionListItem:
     """
     Assemble one :class:`SessionListItem` from a conversation row and
@@ -1147,7 +1148,9 @@ def _build_session_list_item(
     # Per-viewer read tracking, embedded so the client hydrates the unread
     # dots straight from the list (no separate fetch). Built per-user here —
     # `user_id` is the requesting caller, never broadcast to other viewers.
-    viewer_last_seen, viewer_unread = _read_state_entry(user_id, conv.id)
+    viewer_last_seen, viewer_unread, viewer_read_version = (
+        read_state if read_state is not None else (*_read_state_entry(user_id, conv.id), 0)
+    )
     return SessionListItem(
         id=conv.id,
         agent_id=conv.agent_id,
@@ -1192,6 +1195,7 @@ def _build_session_list_item(
         ),
         viewer_last_seen=viewer_last_seen,
         viewer_unread=viewer_unread,
+        viewer_read_version=viewer_read_version,
         # Transient; set by the store only on a content search. The WS
         # push-stream path leaves it None (no query in flight there).
         search_snippet=conv.search_snippet,

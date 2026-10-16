@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import omnigent.server.routes.sessions as sessions_routes
+from omnigent.errors import OmnigentError
 from omnigent.server.accounts_config import AccountsConfig
 from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
 from omnigent.server.routes.sessions import SessionLiveness, create_sessions_router
@@ -940,3 +941,57 @@ def test_projects_changed_event_forwards_to_client(
         sessions_routes.user_session_stream.publish(ALICE, {"type": "projects_changed"})
         frame = _recv_until(ws, {"projects_changed"})
         assert frame["type"] == "projects_changed"
+
+
+def test_read_receipt_reaches_another_device_and_fresh_server(
+    app: FastAPI,
+    stores,
+    fast_rescan: None,
+) -> None:
+    """The phone's read updates the Mac's existing socket and a new worker's list."""
+    sid = _seed_session(stores, owner=ALICE, title="cross-device-receipt")
+    headers = {"X-Forwarded-Email": ALICE}
+    with TestClient(app) as phone, TestClient(app) as mac:
+        with mac.websocket_connect("/v1/sessions/updates", headers=headers) as ws:
+            ws.send_json({"type": "watch", "session_ids": [sid]})
+            assert _recv_until(ws, {"snapshot"})["items"][0]["viewer_last_seen"] is None
+            response = phone.put(
+                f"/v1/sessions/{sid}/read-state",
+                headers=headers,
+                json={"last_seen": 500, "unread": False},
+            )
+            assert response.status_code == 204
+            revision = int(response.headers["X-Omnigent-Read-Version"])
+            changed = _recv_until(ws, {"changed"})["items"][0]
+            assert changed["viewer_last_seen"] == 500
+            assert changed["viewer_read_version"] == revision
+            assert changed["viewer_unread"] is False
+        # New router/store objects model a restart or another serving worker.
+        conversations, agents, permissions = stores
+        fresh = FastAPI()
+        fresh.include_router(
+            create_sessions_router(
+                conversation_store=SqlAlchemyConversationStore(conversations.storage_location),
+                agent_store=agents,
+                permission_store=permissions,
+                auth_provider=UnifiedAuthProvider(source="header"),
+            ),
+            prefix="/v1",
+        )
+        with TestClient(fresh) as restarted:
+            row = restarted.get("/v1/sessions", headers=headers).json()["data"][0]
+            assert row["viewer_last_seen"] == 500
+            assert row["viewer_read_version"] == revision
+            with pytest.raises(OmnigentError) as denied:
+                restarted.put(
+                    f"/v1/sessions/{sid}/read-state",
+                    headers={"X-Forwarded-Email": BOB},
+                    json={"last_seen": 900, "unread": False},
+                )
+            assert denied.value.http_status in (403, 404)
+            assert (
+                restarted.get("/v1/sessions", headers=headers).json()["data"][0][
+                    "viewer_last_seen"
+                ]
+                == 500
+            )

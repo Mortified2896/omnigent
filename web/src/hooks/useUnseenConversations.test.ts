@@ -1,6 +1,6 @@
 import type * as UseUnseenConversationsModule from "./useUnseenConversations";
 
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // `authenticatedFetch` is mocked so we can assert the read-state PUT
@@ -11,6 +11,7 @@ const { authFetch } = vi.hoisted(() => ({ authFetch: vi.fn() }));
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: authFetch }));
 
 type Mod = typeof UseUnseenConversationsModule;
+const loadedModules: Mod[] = [];
 
 /**
  * The module keeps its read-state mirror in module-level singletons
@@ -31,7 +32,9 @@ async function reloadKeepingStorage(): Promise<Mod> {
   vi.resetModules();
   authFetch.mockReset();
   authFetch.mockResolvedValue({ ok: true, status: 204, json: async () => ({}) });
-  return import("./useUnseenConversations");
+  const mod = await import("./useUnseenConversations");
+  loadedModules.push(mod);
+  return mod;
 }
 
 /** The body of the most recent PUT, or undefined if none. */
@@ -54,6 +57,7 @@ function setWindowFocused(focused: boolean): void {
 
 afterEach(() => {
   cleanup();
+  for (const mod of loadedModules.splice(0)) mod.resetReadStateForTests();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -217,6 +221,9 @@ describe("markConversationRead", () => {
 
     expect(mod.isConversationUnseen("conv-1", 5_000, "idle")).toBe(false);
     expect(mod.isExplicitlyUnread("conv-1")).toBe(false);
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(lastPutBody()).toEqual({ last_seen: 5_000, unread: false });
   });
 
@@ -438,5 +445,120 @@ describe("pod-independent read-state (replica sharding)", () => {
     stale.seedReadState([{ id: "conv-1", viewer_last_seen: 100 }]);
     expect(stale.isConversationUnseen("conv-1", 4_000, "idle")).toBe(false);
     expect(stale.isConversationUnseen("conv-1", 6_000, "idle")).toBe(true);
+  });
+});
+
+describe("cross-device read receipts", () => {
+  it("clears Mac unread state when the phone read arrives without reloading", async () => {
+    const mod = await loadFresh();
+    mod.seedReadState([
+      { id: "chat", updated_at: 200, viewer_last_seen: 100, viewer_read_version: 1 },
+    ]);
+    expect(mod.isConversationUnseen("chat", 200, "idle")).toBe(true);
+    mod.seedReadState([
+      { id: "chat", updated_at: 200, viewer_last_seen: 200, viewer_read_version: 2 },
+    ]);
+    expect(mod.isConversationUnseen("chat", 200, "idle")).toBe(false);
+    // Later activity must still produce unread.
+    expect(mod.isConversationUnseen("chat", 201, "idle")).toBe(true);
+    mod.seedReadState([{ id: "chat", viewer_last_seen: 100, viewer_read_version: 1 }]);
+    expect(mod.isConversationUnseen("chat", 200, "idle")).toBe(false);
+  });
+
+  it("syncs both directions of an explicit unread override using revisions", async () => {
+    const mod = await loadFresh();
+    mod.seedReadState([{ id: "chat", viewer_last_seen: 300, viewer_read_version: 1 }]);
+    mod.seedReadState([
+      { id: "chat", viewer_last_seen: 199, viewer_unread: true, viewer_read_version: 2 },
+    ]);
+    expect(mod.isExplicitlyUnread("chat")).toBe(true);
+    expect(mod.isConversationUnseen("chat", 200, "idle")).toBe(true);
+    mod.seedReadState([
+      { id: "chat", viewer_last_seen: 300, viewer_unread: false, viewer_read_version: 3 },
+    ]);
+    expect(mod.isExplicitlyUnread("chat")).toBe(false);
+    expect(mod.isConversationUnseen("chat", 200, "idle")).toBe(false);
+  });
+
+  it("retries a failed read receipt after reload instead of silently losing it", async () => {
+    const mod = await loadFresh();
+    mod.seedReadState([]);
+    authFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+    mod.markConversationRead("chat", 200);
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("omnigent.readState.v1")!).pending.chat).toBeDefined(),
+    );
+    const reloaded = await reloadKeepingStorage();
+    reloaded.seedReadState([
+      { id: "chat", viewer_last_seen: 100, viewer_unread: true, viewer_read_version: 1 },
+    ]);
+    await waitFor(() => expect(lastPutBody()?.unread).toBe(false));
+    expect(reloaded.isConversationUnseen("chat", 200, "idle")).toBe(false);
+  });
+
+  it("retries a failed save while the app stays open", async () => {
+    const mod = await loadFresh();
+    vi.useFakeTimers();
+    mod.seedReadState([]);
+    authFetch.mockResolvedValueOnce({ ok: false, status: 503 });
+    mod.markConversationRead("chat", 200);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(putCount()).toBe(2);
+    expect(JSON.parse(localStorage.getItem("omnigent.readState.v1")!).pending.chat).toBeUndefined();
+  });
+
+  it("serializes slow writes and rejects a poll started before their acknowledgment", async () => {
+    const mod = await loadFresh();
+    mod.seedReadState([{ id: "chat", viewer_last_seen: 100, viewer_read_version: 1 }]);
+    let finish!: (response: unknown) => void;
+    authFetch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    mod.markConversationUnread("chat", 200);
+    mod.markConversationRead("chat", 200);
+    expect(putCount()).toBe(1);
+    mod.seedReadState([
+      { id: "chat", viewer_last_seen: 199, viewer_unread: true, viewer_read_version: 2 },
+    ]);
+    expect(mod.isExplicitlyUnread("chat")).toBe(false);
+    authFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ "X-Omnigent-Read-Version": "3" }),
+    });
+    finish({ ok: true, headers: new Headers({ "X-Omnigent-Read-Version": "2" }) });
+    await waitFor(() => expect(putCount()).toBe(2));
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem("omnigent.readState.v1")!).pending.chat,
+      ).toBeUndefined(),
+    );
+    mod.seedReadState([
+      { id: "chat", viewer_last_seen: 199, viewer_unread: true, viewer_read_version: 2 },
+    ]);
+    expect(mod.isExplicitlyUnread("chat")).toBe(false);
+  });
+
+  it("records an already mounted chat when its first list finishes loading", async () => {
+    const mod = await loadFresh();
+    setWindowFocused(true);
+    renderHook(() => mod.useMarkConversationSeen("chat", 200));
+    expect(putCount()).toBe(0);
+    act(() => mod.seedReadState([{ id: "chat", updated_at: 200, viewer_last_seen: 100 }]));
+    await waitFor(() => expect(lastPutBody()?.unread).toBe(false));
+    expect(mod.isConversationUnseen("chat", 200, "idle")).toBe(false);
+  });
+
+  it("records reads on mobile visibility resume but never while hidden", async () => {
+    const mod = await loadFresh();
+    mod.seedReadState([]);
+    setWindowFocused(true);
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    renderHook(() => mod.useMarkConversationSeen("chat", 200));
+    expect(putCount()).toBe(0);
+    visibility.mockReturnValue("visible");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(lastPutBody()?.unread).toBe(false);
   });
 });

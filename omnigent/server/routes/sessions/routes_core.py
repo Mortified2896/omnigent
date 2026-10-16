@@ -219,6 +219,7 @@ from omnigent.stores.conversation_store import (
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.permission_store import PermissionStore
 from omnigent.stores.project_store import ProjectStore
+from omnigent.stores.session_read_state import SessionReadStateStore
 from omnigent.util.cost_plan import (
     reserved_cost_control_keys,
 )
@@ -318,6 +319,7 @@ async def _wake_runner_for_model_change(
 def register_core_routes(
     router: APIRouter,
     *,
+    read_state_store: SessionReadStateStore | None = None,
     conversation_store: ConversationStore,
     agent_store: AgentStore,
     file_store: FileStore | None = None,
@@ -1227,12 +1229,10 @@ def register_core_routes(
         Set the calling user's read-state for one session.
 
         Requires ``LEVEL_READ`` on the session in multi-user mode — you can
-        only track read-state for sessions you can see. Stores the values
-        verbatim (the client enforces the baseline's monotonicity and the
-        unread semantics); the server does not interpret them against
-        session status. Returns ``204`` — the client already has the
-        optimistic state and re-reads the authoritative value on the next
-        ``GET /v1/sessions`` poll.
+        only track read-state for sessions you can see. Persists receipts in
+        the workspace database so other devices and workers see them and
+        restarts retain them. Returns ``204`` with the committed revision;
+        list and WebSocket updates carry the same per-viewer state.
 
         :param request: The incoming FastAPI request (for auth).
         :param session_id: Session/conversation identifier.
@@ -1244,6 +1244,11 @@ def register_core_routes(
         await _require_access_and_level(
             user_id, session_id, LEVEL_READ, permission_store, conversation_store
         )
+        if read_state_store is not None:
+            version = await asyncio.to_thread(
+                read_state_store.put, user_id, session_id, body.last_seen, body.unread
+            )
+            return Response(status_code=204, headers={"X-Omnigent-Read-Version": str(version)})
         _set_read_state(user_id, session_id, body.last_seen, body.unread)
         return Response(status_code=204)
 
@@ -1587,6 +1592,11 @@ def register_core_routes(
             user_is_admin = False
         # In-memory lookup — no I/O, so batching avoids re-acquiring
         # the index's lock per row but otherwise has no DB cost.
+        read_states = (
+            await asyncio.to_thread(read_state_store.get_many, user_id, conv_ids)
+            if read_state_store is not None
+            else {}
+        )
         pending_counts = pending_elicitations.counts_for(conv_ids)
         comments_fingerprints = await _comments_fingerprints_for(conv_ids)
         # ── Lazy-on-read backstop for orphaned "running" sessions. ────────
@@ -1659,6 +1669,9 @@ def register_core_routes(
                 pending_count=pending_counts.get(conv.id, 0),
                 child_session_ids=child_ids_by_parent[conv.id],
                 comments_fingerprint=comments_fingerprints.get(conv.id),
+                read_state=read_states.get(conv.id, (None, False, 0))
+                if read_state_store
+                else None,
             )
             for conv in page.data
             if conv.agent_id is not None
@@ -1778,6 +1791,11 @@ def register_core_routes(
             ),
             _comments_fingerprints_for(conv_ids),
         )
+        read_states = (
+            await asyncio.to_thread(read_state_store.get_many, user_id, conv_ids)
+            if read_state_store is not None
+            else {}
+        )
         pending_counts = pending_elicitations.counts_for(conv_ids)
         items = [
             _build_session_list_item(
@@ -1790,6 +1808,9 @@ def register_core_routes(
                 pending_count=pending_counts.get(conv.id, 0),
                 child_session_ids=child_ids_by_parent[conv.id],
                 comments_fingerprint=comments_fingerprints.get(conv.id),
+                read_state=read_states.get(conv.id, (None, False, 0))
+                if read_state_store
+                else None,
             )
             for conv in convs
         ]
@@ -2807,6 +2828,8 @@ def register_core_routes(
         # Only on archive→true; unarchiving leaves it pruned (reads as seen).
         if body.archived is True:
             _prune_session_read_state(session_id)
+            if read_state_store is not None:
+                await asyncio.to_thread(read_state_store.prune, session_id)
             # Defer the stop now that the flag is committed, so a request
             # rejected after this point can't leave a live runner on a session
             # that ends up archived. Detached, not awaited: the response must

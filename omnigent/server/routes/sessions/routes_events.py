@@ -284,6 +284,7 @@ from omnigent.stores.conversation_store import (
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.host_store import host_is_live
 from omnigent.stores.permission_store import PermissionStore
+from omnigent.stores.session_read_state import SessionReadStateStore
 from omnigent.telemetry import emit as _tel_emit
 from omnigent.telemetry.anon import anon_user_id as _tel_anon_user_id
 from omnigent.telemetry.events import SessionDeletedEvent as _TelSessionDeletedEvent
@@ -710,6 +711,7 @@ _RUNNER_EVENT_TYPES = frozenset(
 def register_events_routes(
     router: APIRouter,
     *,
+    read_state_store: SessionReadStateStore | None = None,
     conversation_store: ConversationStore,
     agent_store: AgentStore,
     file_store: FileStore | None = None,
@@ -3434,6 +3436,8 @@ def register_events_routes(
         # caches so they don't accumulate orphan entries for the process
         # lifetime.
         _prune_session_read_state(session_id)
+        if read_state_store is not None:
+            await asyncio.to_thread(read_state_store.prune, session_id)
         # Same for the tracker's entry — a deleted session's launch can
         # never be rendezvoused again (access checks 404 first), so a
         # retained failure is dead weight. ``finish`` also settles a
