@@ -21,6 +21,7 @@ from omnigent.host.advisor_call import (
     _NO_TOOLS_CONFIG_OVERRIDES,
     _NO_TOOLS_FEATURES,
     ADVISOR_MAX_OUTPUT_TOKENS,
+    COMPARISON_MAX_OUTPUT_TOKENS,
     AdvisorCallError,
     build_advisor_prompt,
     generate_advisor_selection,
@@ -66,11 +67,13 @@ def test_no_tools_block_covers_every_bundled_tool_surface() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("suggest_tags", [False, True])
+@pytest.mark.parametrize("mode", ["selection", "tags", "comparison"])
 async def test_advisor_exec_argv_enforces_the_no_tools_stance(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, suggest_tags: bool
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, mode: str
 ) -> None:
     """The captured codex exec invocation carries zero tools end to end."""
+    suggest_tags = mode == "tags"
+    comparison = mode == "comparison"
     captured: dict[str, Any] = {}
     configured_home = tmp_path / "instance-config"
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(configured_home))
@@ -105,7 +108,11 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
 
         async def communicate(self, stdin: bytes | None = None) -> tuple[bytes, bytes]:
             captured["stdin"] = (stdin or b"").decode()
-            output = json.dumps({"candidate_id": "choice-a", "rationale": "fits"})
+            output = json.dumps(
+                {"eligible": True, "answer": "Compound interest grows."}
+                if comparison
+                else {"candidate_id": "choice-a", "rationale": "fits"}
+            )
             events = json.dumps({"item": {"usage": {"input_tokens": 11, "output_tokens": 3}}})
             self._output_path.write_text(output)
             return (events + "\n").encode(), b""
@@ -145,6 +152,8 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
         "candidates": [{"candidate_id": "choice-a"}],
         **({"suggest_task_tags": True} if suggest_tags else {}),
     }
+    if comparison:
+        request = {"purpose": "answer-comparison", "task": "Explain compound interest"}
     result = await generate_advisor_selection(
         request=request,
         model="glm-5.3",
@@ -160,18 +169,24 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     sandbox_at = argv.index("--sandbox")
     assert argv[sandbox_at + 1] == "read-only"
     output_schema = json.loads(captured["output_schema"])
-    assert output_schema["required"] == ["candidate_id", "rationale"] + (
-        ["suggested_task_tags"] if suggest_tags else []
+    assert output_schema["required"] == (
+        ["eligible", "answer"]
+        if comparison
+        else ["candidate_id", "rationale"] + (["suggested_task_tags"] if suggest_tags else [])
     )
     if suggest_tags:
         assert output_schema["properties"]["suggested_task_tags"]["maxItems"] == 8
         assert output_schema["properties"]["suggested_task_tags"]["items"]["maxLength"] == 40
     assert "--output-last-message" in argv
     assert "--json" in argv
-    assert f"model_max_output_tokens={ADVISOR_MAX_OUTPUT_TOKENS}" in argv
+    limit = COMPARISON_MAX_OUTPUT_TOKENS if comparison else ADVISOR_MAX_OUTPUT_TOKENS
+    assert f"model_max_output_tokens={limit}" in argv
     assert 'model_reasoning_effort="high"' in argv
     assert argv[argv.index("--model") + 1] == "glm-5.3"
-    assert captured["image_bytes"] == b"hello"
+    if comparison:
+        assert "--image" not in argv
+    else:
+        assert captured["image_bytes"] == b"hello"
     assert "aGVsbG8=" not in captured["stdin"]
     assert argv[-1] == "-", "the prompt must travel over stdin, not argv"
     disable_values = [
@@ -181,7 +196,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     for override in _NO_TOOLS_CONFIG_OVERRIDES:
         assert override in captured["argv"]
     config_values = [argv[index + 1] for index, item in enumerate(argv[:-1]) if item == "--config"]
-    assert "model_max_output_tokens=2000" in config_values
+    assert f"model_max_output_tokens={limit}" in config_values
     assert 'model_reasoning_effort="high"' in config_values
     assert not any("mcp" in value.lower() for value in config_values), (
         "the advisor transport must never attach MCP servers"
@@ -191,9 +206,15 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     assert captured["resolved_model"] == "glm-5.3"
     assert captured["env"]["ZAI_API_KEY"] == "from-env"
     assert Path(captured["env"]["CODEX_HOME"]).is_relative_to(configured_home / "advisor-runtime")
-    assert "<task>\nDo the thing\n</task>" in captured["stdin"]
+    assert (
+        "Explain compound interest" if comparison else "<task>\nDo the thing\n</task>"
+    ) in captured["stdin"]
     assert result.raw_output.startswith("{")
-    assert json.loads(result.raw_output)["candidate_id"] == "choice-a"
+    assert json.loads(result.raw_output) == (
+        {"eligible": True, "answer": "Compound interest grows."}
+        if comparison
+        else {"candidate_id": "choice-a", "rationale": "fits"}
+    )
     assert result.input_tokens == 11 and result.output_tokens == 3
 
     direct_result = await generate_advisor_selection(
@@ -207,7 +228,7 @@ async def test_advisor_exec_argv_enforces_the_no_tools_stance(
     assert captured["resolved_model"] == "gpt-5.5"
     assert captured["build"]["model"] == "gpt-5.5"
     assert direct_argv[direct_argv.index("--model") + 1] == "gpt-5.5"
-    assert json.loads(direct_result.raw_output)["candidate_id"] == "choice-a"
+    assert direct_result.raw_output == result.raw_output
 
 
 @pytest.mark.asyncio

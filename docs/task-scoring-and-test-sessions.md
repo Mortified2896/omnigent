@@ -98,6 +98,37 @@ receipt reports Jev's confidence and selected-choice probability; Jev does not
 generate a prose rationale or suggest task tags. See the [Decisions API
 example](https://openrouter.ai/blog/insights/what-is-jev/).
 
+### Paired Jev answer preferences
+
+New Jev-reviewed chats offer an answer comparison on every eligible initial
+prompt where the user's frozen model/effort choice and Jev's frozen choice differ.
+The normal answer remains available while one isolated call generates the other
+choice. The two cards use randomized, persisted A/B order and reveal requested
+model/effort identities after a preference is saved. A/B, equal, neither, skip,
+and an optional comment are caller-owned append-only revisions; the UI reports
+server acknowledgment and preserves failed-save drafts. Voting records evidence;
+it does not change the ongoing chat's model or replace its history.
+
+Eligibility is deliberately conservative: bounded, recognizable text-only
+requests, no attachments or previous turns, no coding, external actions, current
+information, tools, interrupted answers, or changed execution choice. The second
+model can also decline if tools are needed. Initially, the isolated transport
+supports qualified native Codex choices on the frozen Codex, GLM, and OmniRoute
+account bindings. Other harnesses or unavailable exact routes show an unavailable
+comparison; they never substitute a different model or fall back to another
+account. One comparison can run per host in a server process. A durable claim
+prevents duplicate calls for a response across tabs and replicas. Calls time out;
+interrupted claims stay failed and are not automatically replayed.
+
+These are observational paired preferences: the ordinary answer was already
+visible, and the other arm uses a prompt-only, tool-free execution context.
+Model identity is requested rather than upstream-attested unless response
+attribution supplies an observed identity. Stored evidence retains those limits,
+exact choices, the executed route, and available usage; unknown usage/identity
+stays unknown. Preferences are separate from `task.experiment.outcome` and
+scored outcomes, and are not included in Jev requests or automated scoring input.
+Existing chats are not backfilled with comparison labels.
+
 **Advanced options** exposes **Open side chat** or **Reopen side chat**. This keeps
 the existing saved feedback fork and explicit acceptance of suggested edits.
 Continuing in the original session avoids a new fork and preserves more of the
@@ -187,8 +218,9 @@ backfilled or deleted. Retention holds and uncertain sessions remain available.
 5. Operational HomeLab scripts belong in `Mortified2896/HomeLab`, with its own
    AGENTS/worktree. Inspect current scripts before changing them. No HomeLab
    acceptance script was found for this flow, so this task adds no HomeLab change.
-6. Keep the PR draft until these checks pass. No merge, deployment, service restart,
-   provider inference, or production-data mutation is implied by this source work.
+6. Apply the current task authorization and repository AGENTS.md for delivery.
+   Test-session hygiene does not grant production-data mutation or permission
+   to bypass candidate inspection before production promotion.
 
 Suggested focused checks (normal repository development environment):
 

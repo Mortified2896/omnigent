@@ -8,6 +8,7 @@ export const FeedbackFormContext = createContext<{
   hostId: string | null;
   human: Map<string, ExperimentEvent>;
   ready: boolean;
+  compareJev?: boolean;
   renderPerspective?: (responseId: string, review: ReviewPerspectiveInput) => ReactNode;
 } | null>(null);
 

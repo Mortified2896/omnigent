@@ -4,6 +4,7 @@ import { feedbackVisibleText } from "@/lib/feedbackPrompts";
 import { FeedbackDiscussionContext, FeedbackFormContext } from "@/components/FeedbackContext";
 import { ResponseRouteBadge } from "./ResponseRouteBadge";
 import { ResponseFeedbackActions, canRateResponse } from "@/components/ResponseFeedbackActions";
+import { AnswerComparison } from "@/components/AnswerComparison";
 import { GeneratedResponseAudioPlayer } from "@/components/chat/GeneratedResponseAudioPlayer";
 import { ReportActions, ReportActionsContext } from "@/components/scheduled/ReportActions";
 import { extractReportActions } from "@/lib/reportActions";
@@ -980,6 +981,7 @@ function AssistantBubble({
   // main transcript) reads the root store exactly as before; `useConversationEntryState(null)`
   // is inert (no subscription, stable empty snapshot).
   const feedbackDiscussion = useContext(FeedbackDiscussionContext);
+  const feedbackForm = useContext(FeedbackFormContext);
   const reportContext = useContext(ReportActionsContext);
   const conversationIdForFeedback = useScopedConversationId();
   const feedbackTarget =
@@ -1192,6 +1194,13 @@ function AssistantBubble({
         )}
         {canRateResponse(bubble) && !responseInProgress && (
           <div className="mt-2 w-full">
+            {feedbackForm?.compareJev && conversationId && !feedbackTarget && (
+              <AnswerComparison
+                sessionId={conversationId}
+                responseId={bubble.responseId}
+                autoStart={isLastAssistant}
+              />
+            )}
             {bubble.workedForS != null && (
               <p className="mb-2 text-xs text-muted-foreground tabular-nums">
                 Answered in {bubble.workedForS.toFixed(1)}s

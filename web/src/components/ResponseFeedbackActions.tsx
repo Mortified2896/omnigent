@@ -27,11 +27,13 @@ export type { ReviewPerspectiveInput } from "./FeedbackContext";
 export function ResponseFeedbackProvider({
   sessionId,
   hostId = null,
+  compareJev = false,
   renderPerspective,
   children,
 }: {
   sessionId: string;
   hostId?: string | null;
+  compareJev?: boolean;
   renderPerspective?: (responseId: string, review: ReviewPerspectiveInput) => ReactNode;
   children: React.ReactNode;
 }) {
@@ -41,8 +43,8 @@ export function ResponseFeedbackProvider({
     for (const row of experiment.data ?? []) {
       if (row.kind === "outcome" && row.outcome) human.set(row.response_id, row);
     }
-    return { sessionId, hostId, human, ready: experiment.isSuccess, renderPerspective };
-  }, [sessionId, hostId, experiment.data, experiment.isSuccess, renderPerspective]);
+    return { sessionId, hostId, compareJev, human, ready: experiment.isSuccess, renderPerspective };
+  }, [sessionId, hostId, compareJev, experiment.data, experiment.isSuccess, renderPerspective]);
   return <FeedbackContext.Provider value={value}>{children}</FeedbackContext.Provider>;
 }
 

@@ -4,13 +4,16 @@ import asyncio
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
+from omnigent.answer_comparison import Vote
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ, RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.response_attribution import list_response_attributions, list_response_routes
 from omnigent.server.routes._auth_helpers import get_user_id, require_access_and_level
+from omnigent.server.routes._content_type import require_json_content_type
 from omnigent.server.routes._errors import session_not_found
+from omnigent.server.routes._origin import require_trusted_origin
 from omnigent.server.task_experiment import Outcome, list_experiment_events, save_outcome
 from omnigent.server.task_scoring import (
     ExclusionReason,
@@ -42,6 +45,13 @@ class FeedbackInput(BaseModel):
     comment: str | None = Field(default=None, max_length=4000)
 
 
+class AnswerPreferenceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    choice: Vote
+    comment: str = Field(default="", max_length=4000)
+
+
 def register_feedback_routes(
     router: APIRouter,
     *,
@@ -66,6 +76,76 @@ def register_feedback_routes(
         if conv is None:
             raise session_not_found()
         return user_id or RESERVED_USER_LOCAL
+
+    @router.get("/sessions/{session_id}/answer-comparisons/{response_id}")
+    async def get_answer_comparison(request: Request, session_id: str, response_id: str):
+        from omnigent.server.answer_comparison import (
+            comparison_source,
+            public_comparison,
+            read_comparison,
+        )
+
+        user = await caller(request, session_id, LEVEL_READ)
+        record = await asyncio.to_thread(
+            read_comparison, conversation_store, session_id, response_id, user
+        )
+        if record is not None:
+            return public_comparison(record)
+        service = getattr(request.app.state, "model_advisor_service", None)
+        if service is None:
+            return None
+        source = await asyncio.to_thread(
+            comparison_source,
+            conversation_store,
+            service.repository,
+            session_id,
+            response_id,
+            user,
+        )
+        return {"state": "eligible", "candidates": []} if source is not None else None
+
+    @router.post(
+        "/sessions/{session_id}/answer-comparisons/{response_id}",
+        dependencies=[Depends(require_json_content_type), Depends(require_trusted_origin)],
+    )
+    async def create_answer_comparison(request: Request, session_id: str, response_id: str):
+        from omnigent.server.answer_comparison import public_comparison
+
+        await caller(request, session_id, LEVEL_EDIT)
+        service = getattr(request.app.state, "model_advisor_service", None)
+        if service is None:
+            raise HTTPException(503, "Model Advisor is unavailable")
+        try:
+            result = await service.compare_jev_answer(
+                get_user_id(request, auth_provider), session_id, response_id
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return public_comparison(result)
+
+    @router.put(
+        "/sessions/{session_id}/answer-comparisons/{response_id}/preference",
+        dependencies=[Depends(require_json_content_type), Depends(require_trusted_origin)],
+    )
+    async def put_answer_preference(
+        request: Request, session_id: str, response_id: str, body: AnswerPreferenceInput
+    ):
+        from omnigent.server.answer_comparison import public_comparison, save_vote
+
+        user = await caller(request, session_id, LEVEL_EDIT)
+        try:
+            record = await asyncio.to_thread(
+                save_vote,
+                conversation_store,
+                session_id,
+                response_id,
+                user,
+                body.choice,
+                body.comment,
+            )
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return public_comparison(record)
 
     @router.get("/sessions/{session_id}/feedback-discussions")
     async def get_feedback_discussions(request: Request, session_id: str) -> list[dict]:

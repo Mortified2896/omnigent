@@ -542,6 +542,7 @@ class ModelAdvisorService:
         self._session_harness_resolver = session_harness_resolver
         self._randbelow = randbelow
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._answer_comparison_hosts: set[str] = set()
 
     # ── authorization helpers ────────────────────────────────
 
@@ -1816,6 +1817,10 @@ class ModelAdvisorService:
             }
             if route.route_id:
                 labels["omnigent.access_lane"] = route.route_id
+            from omnigent.server.answer_comparison import LABEL, round_eligible
+
+            if round_eligible(frozen, review):
+                labels[LABEL] = "1"
             return labels
 
         continue_session_id = launch.get("continue_session_id")
@@ -2301,6 +2306,115 @@ class ModelAdvisorService:
             request=request,
         )
         return session.id
+
+    async def compare_jev_answer(
+        self, user_id: str | None, session_id: str, response_id: str
+    ) -> dict[str, Any] | None:
+        """Generate only the counterfactual arm; never touch the active runner."""
+        from omnigent.answer_comparison import answer_request, parse_answer
+        from omnigent.server.answer_comparison import (
+            CALL_TIMEOUT,
+            alternative_plan,
+            append_event,
+            comparison_source,
+            read_comparison,
+            result_payload,
+        )
+        from omnigent.server.routes._advisor_call import request_host_advisor_call
+
+        owner = self.owner_id(user_id)
+        existing = await asyncio.to_thread(
+            read_comparison, self._conversation_store, session_id, response_id, owner
+        )
+        if existing is not None:
+            return existing
+        source = await asyncio.to_thread(
+            comparison_source,
+            self._conversation_store,
+            self.repository,
+            session_id,
+            response_id,
+            owner,
+        )
+        if source is None:
+            return None
+        host_id = source["host_id"]
+        self._authorized_host(user_id, host_id)
+        if host_id in self._answer_comparison_hosts:
+            raise HTTPException(429, "Another answer comparison is running; try again shortly")
+        # Reserve host capacity before an await; failure never queues extra work.
+        self._answer_comparison_hosts.add(host_id)
+        try:
+            catalog = await self.load_catalog(user_id, host_id)
+            plan = alternative_plan(source, catalog)
+            conn = self._live_host_connection(self._host_store.get_host(host_id))
+            claimed = await asyncio.to_thread(
+                append_event,
+                self._conversation_store,
+                session_id,
+                response_id,
+                owner,
+                {
+                    "state": "pending",
+                    "started_at": time.time(),
+                    "round_id": source["round_id"],
+                    "reverse": bool(secrets.randbelow(2)),
+                },
+                claim=True,
+            )
+        except BaseException:
+            self._answer_comparison_hosts.discard(host_id)
+            raise
+        if claimed.deduplicated:
+            self._answer_comparison_hosts.discard(host_id)
+            return await asyncio.to_thread(
+                read_comparison, self._conversation_store, session_id, response_id, owner
+            )
+
+        async def generate() -> None:
+            try:
+                route = plan.primary
+                result = await request_host_advisor_call(
+                    host_registry=self._host_registry,
+                    host_conn=conn,
+                    request=answer_request(source["frozen"].task),
+                    model=route.wire_model,
+                    access_lane=route.route_id,
+                    reasoning_effort=None
+                    if route.wire_effort == "not_applicable"
+                    else route.wire_effort,
+                    timeout_s=CALL_TIMEOUT,
+                )
+                if result.get("status") != "ok" or not isinstance(result.get("raw_output"), str):
+                    raise ValueError(
+                        "The other answer could not be generated on the connected host"
+                    )
+                answer = parse_answer(result["raw_output"])
+                payload = (
+                    result_payload(source, route, answer, self._advisor_overhead(result))
+                    if answer is not None
+                    else {"state": "ineligible", "reason": "This task needs tools or actions"}
+                )
+            except (HTTPException, ConnectionError, TimeoutError, ValueError) as exc:
+                payload = {"state": "failed", "error": str(exc)[:600]}
+            except Exception:
+                _logger.exception("Jev answer comparison failed for session %s", session_id)
+                payload = {
+                    "state": "failed",
+                    "error": "Comparison unavailable; your original answer is preserved",
+                }
+            finally:
+                self._answer_comparison_hosts.discard(host_id)
+            await asyncio.to_thread(
+                append_event, self._conversation_store, session_id, response_id, owner, payload
+            )
+
+        task = asyncio.create_task(generate())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return await asyncio.to_thread(
+            read_comparison, self._conversation_store, session_id, response_id, owner
+        )
 
     async def cancel_round(
         self,

@@ -1237,6 +1237,10 @@ export function ChatPage() {
         key={urlConvId}
         sessionId={urlConvId}
         hostId={activeConv?.host_id ?? activeSession?.hostId ?? null}
+        compareJev={
+          (activeSession?.labels ?? activeConv?.labels)?.["omnigent.advisor.answer_comparison"] ===
+          "1"
+        }
       >
         <FeedbackDiscussionsProvider sessionId={urlConvId}>
           <SessionLayout mainAgent={mainAgent} />

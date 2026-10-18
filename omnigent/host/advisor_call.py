@@ -1,8 +1,9 @@
-"""Bounded, tool-free advisor selection through isolated native Codex exec.
+"""Bounded, tool-free advisor selection and text comparisons through native Codex exec.
 
 One process, one turn, no continuation: the advisor sees only the allowlisted
 request built by ``model_advisor_core.build_advisor_request`` and must answer
-with a strict JSON selection. Tool prevention lives at the transport boundary,
+with a strict JSON selection. Answer comparisons use the same isolation with
+only the initial task and a strict answer schema. Tool prevention lives at the transport boundary,
 not in the prompt:
 
 - a throwaway private ``CODEX_HOME`` plus ``--ignore-user-config`` means no
@@ -45,6 +46,7 @@ ADVISOR_INFERENCE_TIMEOUT_SECONDS = 90.0
 # that honor it. Unknown config keys are ignored by older CLIs (no
 # --strict-config here).
 ADVISOR_MAX_OUTPUT_TOKENS = 2000
+COMPARISON_MAX_OUTPUT_TOKENS = 8000
 
 _NO_TOOLS_FEATURES = (
     "apps",
@@ -239,7 +241,7 @@ async def generate_advisor_selection(
     reasoning_effort: str | None = None,
     timeout_s: float = ADVISOR_INFERENCE_TIMEOUT_SECONDS,
 ) -> AdvisorCallResult:
-    """Run the single bounded advisor call and return its raw selection text.
+    """Run one bounded selection or text-comparison call and return its raw JSON.
 
     Raises :class:`AdvisorCallError` on transport failure or timeout. The
     raw output is NOT yet validated against the frozen pool — the caller
@@ -256,7 +258,16 @@ async def generate_advisor_selection(
     )
     from omnigent.models.codex_model_vocabulary import native_codex_model_slug
 
-    prompt = build_advisor_prompt(request)
+    comparison = request.get("purpose") == "answer-comparison"
+    if comparison:
+        from omnigent.answer_comparison import comparison_prompt
+
+        try:
+            prompt = comparison_prompt(request)
+        except ValueError as exc:
+            raise AdvisorCallError(str(exc)) from exc
+    else:
+        prompt = build_advisor_prompt(request)
     native_model = native_codex_model_slug(model) if access_lane == "codex-direct" else model
     launch = resolve_native_codex_launch(model=native_model, spec=None, access_lane=access_lane)
     started = time.monotonic()
@@ -294,7 +305,11 @@ async def generate_advisor_selection(
         # argv, and the isolated home still contains no inherited tools/rules.
         output_schema_path = temp_root / "advisor-output-schema.json"
         output_schema = _OUTPUT_SCHEMA
-        if request.get("suggest_task_tags") is True:
+        if comparison:
+            from omnigent.answer_comparison import ANSWER_SCHEMA
+
+            output_schema = ANSWER_SCHEMA
+        elif request.get("suggest_task_tags") is True:
             output_schema = {
                 **_OUTPUT_SCHEMA,
                 "properties": {
@@ -331,7 +346,8 @@ async def generate_advisor_selection(
             args.extend(("--config", override))
         for override in _NO_TOOLS_CONFIG_OVERRIDES:
             args.extend(("--config", override))
-        args.extend(("--config", f"model_max_output_tokens={ADVISOR_MAX_OUTPUT_TOKENS}"))
+        output_limit = COMPARISON_MAX_OUTPUT_TOKENS if comparison else ADVISOR_MAX_OUTPUT_TOKENS
+        args.extend(("--config", f"model_max_output_tokens={output_limit}"))
         if reasoning_effort and reasoning_effort != "not_applicable":
             args.extend(("--config", f'model_reasoning_effort="{reasoning_effort}"'))
         if launch.model:
