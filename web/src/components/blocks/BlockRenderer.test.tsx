@@ -13,7 +13,7 @@ import type { RenderItem } from "@/lib/renderItems";
 import { ConversationScrollLockContext } from "@/components/ai-elements/conversation";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { normalizeExplicitMathDelimiters } from "@/components/ai-elements/mathMarkdown";
-import { BlockRenderer } from "./BlockRenderer";
+import { BlockRenderer, rendersOnlyWorkedFold } from "./BlockRenderer";
 
 afterEach(cleanup);
 
@@ -625,6 +625,74 @@ describe("BlockRenderer dispatch", () => {
       expect(fold).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByText("No conflict.")).toBeNull();
       expect(screen.getByText("Merged.")).toBeDefined();
+    });
+
+    it("shows every completed reasoning section without opening either fold", () => {
+      const items: RenderItem[] = [
+        { kind: "reasoning", itemId: "r0", text: "First reasoning section.", duration: 1 },
+        tool(1),
+        { kind: "reasoning", itemId: "r1", text: "Second reasoning section.", duration: 2 },
+        { kind: "text", itemId: "m1", text: "All done.", final: true },
+      ];
+      render(<BlockRenderer items={items} sessionStatus="idle" turnLifecycle="completed" />);
+
+      const fold = screen.getByRole("button", { name: "Worked" });
+      expect(fold).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("First reasoning section.")).toBeVisible();
+      expect(screen.getByText("Second reasoning section.")).toBeVisible();
+      expect(screen.getByText("All done.")).toBeVisible();
+
+      fireEvent.click(fold);
+      expect(screen.queryByText("First reasoning section.")).toBeNull();
+      expect(screen.getByText("All done.")).toBeVisible();
+      fireEvent.click(fold);
+      expect(screen.getByText("First reasoning section.")).toBeVisible();
+      expect(screen.getByText("Second reasoning section.")).toBeVisible();
+    });
+
+    it("keeps reasoning visible after a live turn settles and its Worked fold appears", async () => {
+      const items: RenderItem[] = [
+        { kind: "reasoning", itemId: "r0", text: "Reasoning stays visible.", duration: 1 },
+        tool(1),
+        { kind: "text", itemId: "m1", text: "All done.", final: true },
+      ];
+      const { rerender } = render(
+        <BlockRenderer items={items} sessionStatus="running" turnLifecycle="streaming" />,
+      );
+      expect(screen.getByText("Reasoning stays visible.")).toBeVisible();
+
+      rerender(<BlockRenderer items={items} sessionStatus="idle" turnLifecycle="completed" />);
+      await waitFor(() => expect(screen.getByTestId("turn-worked-fold")).toBeDefined());
+      await new Promise((resolve) => {
+        requestAnimationFrame(resolve);
+      });
+
+      expect(screen.getByRole("button", { name: "Worked" })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByText("Reasoning stays visible.")).toBeVisible();
+    });
+
+    it("keeps a continued reasoning fragment expanded with its bubble controls", () => {
+      const items: RenderItem[] = [
+        {
+          kind: "reasoning",
+          itemId: "r0",
+          text: "Work continues in the next bubble.",
+          duration: 1,
+        },
+        tool(1),
+      ];
+      const props = { items, sessionStatus: "idle" as const, continued: true };
+      render(<BlockRenderer {...props} />);
+
+      expect(screen.getByRole("button", { name: "Worked" })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(screen.getByText("Work continues in the next bubble.")).toBeVisible();
+      expect(rendersOnlyWorkedFold(props)).toBe(false);
     });
 
     it("honors late interjection detection without overriding a user collapse", () => {

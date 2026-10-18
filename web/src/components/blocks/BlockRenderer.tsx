@@ -23,6 +23,8 @@
 //    routing/dispatch cards stay visible outside the fold; a turn
 //    with no trailing answer (interrupted / failed / tool-only step
 //    bubbles) keeps its trace expanded.
+//    Turns containing reasoning text also start expanded so the outer
+//    fold cannot hide the reasoning that is visible by default.
 
 import type { ReactNode } from "react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -210,13 +212,17 @@ function hasFoldableShape(
  * answer to anchor them to, that costs nothing visible.
  */
 export function rendersOnlyWorkedFold(inputs: FoldInputs): boolean {
-  if (inputs.defaultExpanded) return false;
+  if (inputs.defaultExpanded || hasReasoningText(inputs.items)) return false;
   const { isOwnTurnLive, possiblyLive } = turnLiveness(inputs);
   if (isOwnTurnLive || possiblyLive) return false;
   const partition = partitionTurn(inputs.items);
   return (
     hasFoldableShape(inputs.items, partition, inputs.continued) && partition.final.length === 0
   );
+}
+
+function hasReasoningText(items: RenderItem[]): boolean {
+  return items.some((item) => item.kind === "reasoning" && item.text.trim().length > 0);
 }
 
 type ToolRunFragment =
@@ -327,7 +333,7 @@ export function BlockRenderer({
         <TurnWorkedFold
           workedForS={workedForS}
           animateCollapse={animateCollapse}
-          defaultOpen={defaultExpanded}
+          defaultOpen={defaultExpanded || hasReasoningText(items)}
         >
           {renderSequence(process, { liveEdge: false })}
         </TurnWorkedFold>
@@ -558,7 +564,7 @@ function TurnWorkedFold({
   const [open, setOpen] = useState(animateCollapse || defaultOpen);
   const userChangedOpenRef = useRef(false);
   useLayoutEffect(() => {
-    // History hydration can identify an interjection after this fold mounted.
+    // History hydration can reveal reasoning or an interjection after mount.
     // Honor that late default unless the user has already made their own choice.
     if (defaultOpen && !userChangedOpenRef.current) setOpen(true);
   }, [defaultOpen]);

@@ -1,7 +1,6 @@
 // Adapter from a `RenderItem.reasoning` to the vendored `<Reasoning>`
-// chain. The vendored component handles auto-open/auto-close timing and
-// the "Thought for N seconds" timer via wall clock; we just thread
-// through `isStreaming` and the accumulated text.
+// chain. Reasoning stays expanded by default; we thread through its
+// streaming state, recorded duration, and accumulated text.
 
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 

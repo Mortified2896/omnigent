@@ -63,13 +63,13 @@ export const Reasoning = memo(
     children,
     ...props
   }: ReasoningProps) => {
-    // Open state follows isStreaming by default, but a manual user
-    // toggle takes precedence until the next time streaming starts.
+    // Keep reasoning visible during streaming and in completed history.
+    // A manual toggle takes precedence until the next stream starts.
     // Resetting on the next stream means a new reasoning section
     // doesn't inherit the user's choice from the previous one.
     const [userOverride, setUserOverride] = useState<boolean | null>(null);
     // A non-expandable section is always closed — there's nothing inside.
-    const isOpen = expandable ? (userOverride ?? isStreaming) : false;
+    const isOpen = expandable && (userOverride ?? true);
 
     useEffect(() => {
       if (isStreaming) setUserOverride(null);

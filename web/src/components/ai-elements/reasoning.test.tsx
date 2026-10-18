@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./reasoning";
 
@@ -57,10 +57,43 @@ describe("Reasoning — auto-expand", () => {
     expect(screen.getByText("Thought for a few seconds").className).not.toContain("text-shimmer");
   });
 
-  it("renders the trigger in the closed state when isStreaming=false on mount", () => {
+  it("shows completed reasoning in full on mount", () => {
     renderReasoning(false);
     const trigger = screen.getByRole("button");
-    expect(trigger.getAttribute("data-state")).toBe("closed");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Some reasoning text")).toBeVisible();
+  });
+
+  it("keeps reasoning visible when streaming ends", () => {
+    const view = renderReasoning(true);
+    view.rerender(
+      <Reasoning isStreaming={false}>
+        <ReasoningTrigger />
+        <ReasoningContent>Some reasoning text</ReasoningContent>
+      </Reasoning>,
+    );
+
+    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Some reasoning text")).toBeVisible();
+  });
+
+  it("honors manual collapse through completion and reopens for the next stream", () => {
+    const reasoning = (isStreaming: boolean) => (
+      <Reasoning isStreaming={isStreaming}>
+        <ReasoningTrigger />
+        <ReasoningContent>Some reasoning text</ReasoningContent>
+      </Reasoning>
+    );
+    const view = render(reasoning(true));
+    fireEvent.click(screen.getByRole("button"));
+    view.rerender(reasoning(false));
+    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("Some reasoning text")).toBeVisible();
+    fireEvent.click(screen.getByRole("button"));
+    view.rerender(reasoning(true));
+    expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("true");
   });
 });
 
