@@ -723,6 +723,8 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # Executable selection must survive CLI -> daemon -> runner. The
         # passthrough list is only applied at the second boundary.
         "OMNIGENT_CODEX_PATH",
+        # Session-local MCP startup policy must reach the harness in its runner.
+        "OMNIGENT_CODEX_MCP_STARTUP_SERVERS",
         # Credential-env denylists must survive both daemon and runner hops.
         # This carries variable names only; their values still follow normal forwarding.
         "OMNIGENT_PI_ENV_UNSET",

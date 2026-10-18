@@ -56,6 +56,7 @@ from omnigent.harnesses.codex_native.launch_args import (
     validate_codex_config_profile_state,
     without_codex_config_profile,
 )
+from omnigent.harnesses.codex_native.mcp_on_demand import prepare_on_demand_servers
 from omnigent.harnesses.codex_native.process_registry import (
     CodexNativeProcessOwnerLock,
     acquire_codex_native_process_owner_lock,
@@ -852,7 +853,10 @@ def _inject_mcp_server_config(
         else tomlkit.document()
     )
     # Replace, rather than merge, so deleted servers and fields do not survive.
-    servers = {name: config for name, config in mcp_servers.items() if name != "omnigent"}
+    servers = prepare_on_demand_servers(
+        {name: config for name, config in mcp_servers.items() if name != "omnigent"},
+        bridge_dir,
+    )
     document.pop("mcp_servers", None)
     if servers:
         document["mcp_servers"] = servers

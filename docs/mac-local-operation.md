@@ -51,6 +51,34 @@ Codex app's bundled CLI and set `OMNIGENT_CODEX_PATH` to the intended executable
 in the server/host environment. Restart the host to refresh discovery, then
 verify a real turn; a catalog entry alone does not prove account entitlement.
 
+## Start specialist MCPs only when needed
+
+The Mac execution host can opt into session-local MCP activation by setting
+`OMNIGENT_CODEX_MCP_STARTUP_SERVERS=omniroute` in its environment. Codex starts
+the Omnigent bridge, its normal app integrations, the named user MCPs, and any
+user MCP marked `required = true`. Other enabled user MCPs remain configured
+but stopped until a task needs them. An empty value defers every optional user
+MCP; leaving the variable unset preserves normal Codex startup behavior.
+
+The agent receives `sys_mcp_servers` through the Omnigent bridge. It can list
+available integrations and enable a specialist such as `anki`, `shadcn`,
+`penpot`, or a Unity connection for the current chat. You can also ask directly,
+for example, "Enable Anki for this chat." Activation uses Codex's supported
+`config/mcpServer/reload` API; native MCP tools refresh on the next model step.
+Enabling requests a connection and does not prove the server is healthy.
+
+Selections survive resuming that chat and do not change other chats or
+`~/.codex/config.toml`. Globally disabled MCPs remain unavailable. The tool
+protects required/startup integrations and prevents launching an identical
+transport twice under aliases such as `unity-mcp` and `unity_mcp`. Start the
+underlying application or bridge when an integration needs it; keeping Unity
+or Penpot deferred avoids irrelevant connection timeouts during ordinary chats.
+
+This setting belongs on the execution host. Updating only the web server does
+not update existing host processes. Verify a fresh chat on the updated host,
+including actual activation and a native tool call. Preserve busy hosts and
+their runners during rollout; use an isolated host for acceptance.
+
 ## Claude Code and Jev harness selection
 
 For Anthropic models, install Claude Code using Omnigent's supported harness installer and sign in on

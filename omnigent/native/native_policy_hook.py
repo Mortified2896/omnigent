@@ -325,9 +325,13 @@ def hook_payload_to_evaluation_request(
     tool_name = payload.get("tool_name", "")
     # Omnigent MCP tools are already policy-checked by the relay path
     # (ProxyMcpManager → Omnigent /mcp endpoint → _evaluate_tool_call_policy).
-    # Skip only those here to avoid double evaluation; connector-native MCP
-    # tools such as mcp__github__* must still go through this hook.
-    if isinstance(tool_name, str) and tool_name.startswith("mcp__omnigent__"):
+    # Session-local MCP activation runs inside the bridge, not the relay.
+    # It and connector-native tools must still go through this hook.
+    if (
+        isinstance(tool_name, str)
+        and tool_name.startswith("mcp__omnigent__")
+        and tool_name != "mcp__omnigent__sys_mcp_servers"
+    ):
         return None
     tool_input = payload.get("tool_input") or {}
     if hook_event == _PRE_TOOL_USE:

@@ -7180,6 +7180,12 @@ def _combined_mcp_tool_schemas(
         if not isinstance(name, str) or not name:
             continue
         schemas[name] = _mcp_tool_schema_from_spec(tool_spec)
+    if (bridge_dir / "mcp_on_demand.json").exists():
+        from omnigent.harnesses.codex_native.mcp_on_demand import activation_tool_schema
+
+        activation = activation_tool_schema(bridge_dir)
+        if activation is not None:
+            schemas[activation["name"]] = activation
     return list(schemas.values())
 
 
@@ -7224,6 +7230,10 @@ def _call_mcp_tool(
         return _mcp_error(f"unknown tool: {name!r}")
     if not isinstance(arguments, dict):
         arguments = {}
+    if name == "sys_mcp_servers" and (bridge_dir / "mcp_on_demand.json").exists():
+        from omnigent.harnesses.codex_native.mcp_on_demand import call_activation_tool
+
+        return call_activation_tool(bridge_dir, arguments)
     if name in _read_relay_tool_names(bridge_dir):
         return _call_relay_tool(bridge_dir, name, arguments)
     if name not in tools:
