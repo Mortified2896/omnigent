@@ -102,6 +102,7 @@ async def test_omitted_values_are_filled_and_membership_is_immediate(
     assert body["agent_id"] == CUSTOM_AGENT_ID
     assert body["workspace"] == "/work/project"
     assert body["project_id"] == project_id
+    assert int(body["labels"]["omnigent.pinned"]) > 0
 
 
 async def test_explicit_values_are_not_overridden(
@@ -319,9 +320,12 @@ async def test_null_project_id_with_valid_agent_matches_key_absent_create(
     body = null_response.json()
     assert "warnings" not in body
     assert body["project_id"] is None
+    absent = absent_response.json()
+    assert int(body["labels"].pop("omnigent.pinned")) > 0
+    assert int(absent["labels"].pop("omnigent.pinned")) > 0
     volatile = {"id", "created_at", "updated_at", "root_conversation_id"}
     assert {key: value for key, value in body.items() if key not in volatile} == {
-        key: value for key, value in absent_response.json().items() if key not in volatile
+        key: value for key, value in absent.items() if key not in volatile
     }
 
 

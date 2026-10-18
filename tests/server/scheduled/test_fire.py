@@ -165,6 +165,7 @@ class FakeConversationStore:
             workspace=kwargs.get("workspace"),
             host_id=kwargs.get("host_id"),
             git_branch=kwargs.get("git_branch"),
+            labels=dict(kwargs.get("labels") or {}),
         )
         self.created.append(kwargs)
         return conv
@@ -434,10 +435,11 @@ async def test_delete_between_on_fire_and_run_fire_is_noop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_creates_session_grant_and_run() -> None:
+@pytest.mark.parametrize("user_id", [None, "alice@example.com"])
+async def test_active_creates_session_grant_and_run(user_id: str | None) -> None:
     perm = FakePermissionStore()
     conv_store = FakeConversationStore()
-    store = FakeScheduledTaskStore(rows={"task_1": _task()})
+    store = FakeScheduledTaskStore(rows={"task_1": _task(user_id=user_id)})
     launched: list[Any] = []
 
     async def _launch(conv: Any, task: Any) -> None:
@@ -454,11 +456,13 @@ async def test_active_creates_session_grant_and_run() -> None:
     assert len(conv_store.created) == 1
     assert conv_store.created[0]["agent_id"] == "ag_1"
     # NULL owner resolved to "local" and granted LEVEL_OWNER.
-    assert perm.ensured == [RESERVED_USER_LOCAL]
-    assert perm.grants and perm.grants[0][0] == RESERVED_USER_LOCAL
+    owner = user_id or RESERVED_USER_LOCAL
+    assert perm.ensured == ([RESERVED_USER_LOCAL] if user_id is None else [])
+    assert perm.grants and perm.grants[0][0] == owner
     assert perm.grants[0][2] == LEVEL_OWNER
     # The launch seam was invoked.
     assert len(launched) == 1
+    assert int(launched[0][0].labels[f"omnigent.pinned.{owner}"]) > 0
     # A run row was recorded and last_run_* stamped on the task.
     assert len(store.runs) == 1
     assert any("last_run_at" in u for u in store.updates)

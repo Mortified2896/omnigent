@@ -364,6 +364,7 @@ from omnigent.server.schemas import (
     SessionStatusEvent,
     SessionUsageEvent,
 )
+from omnigent.server.session_pins import initial_session_labels
 from omnigent.server.subagent_activity import (
     claude_subagent_completion_markers,
     record_claude_subagent_return,
@@ -10743,7 +10744,9 @@ async def _create_session_from_existing_agent(
             )
 
     native_agent = native_coding_agent_for_agent_name(agent.name)
-    initial_labels = dict(body.labels) if body.labels else {}
+    initial_labels = initial_session_labels(
+        body.labels, user_id=user_id, parent_session_id=body.parent_session_id
+    )
     if created_worktree_path is not None:
         from omnigent.server.routes._host_worktree import (
             WORKTREE_ROOT_LABEL_KEY,
@@ -11058,6 +11061,7 @@ async def _create_session_from_existing_agent(
         liveness_lookup=liveness_lookup,
         conversation=conv,
         request=request,
+        viewer_id=user_id,
     )
     return response, conv
 

@@ -1624,7 +1624,8 @@ export interface PinnedConversationsResult {
  * window. Pins now live on the server (a session label) so they follow the
  * user across devices; this query is the source of truth for which sessions
  * are pinned and supplies the rows for any pin that sits outside the loaded
- * list. Each enabled scope fetches one page bounded by the configured pin cap.
+ * list. Each enabled scope follows pagination: automatic review pins can exceed
+ * the manual pin cap, so a page boundary must not hide outstanding reviews.
  *
  * A pre-upgrade server doesn't know the `pinned` param and silently ignores
  * it (FastAPI drops unknown query params), returning an ordinary session page.
@@ -1644,9 +1645,26 @@ async function fetchPinnedScope(
     visibility,
     pinned: "true",
   });
-  const res = await authenticatedFetch(`/v1/sessions?${params.toString()}`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const rows = applySessionTombstones((await res.json()) as ConversationsPage, true).data;
+  const rows: Conversation[] = [];
+  const cursors = new Set<string>();
+  while (true) {
+    // Each page supplies the cursor for the next request.
+    // eslint-disable-next-line no-await-in-loop
+    const res = await authenticatedFetch(`/v1/sessions?${params.toString()}`);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    // eslint-disable-next-line no-await-in-loop
+    const page = (await res.json()) as ConversationsPage;
+    rows.push(...applySessionTombstones(page, true).data);
+    // An older server ignores the filter; don't scan its whole history.
+    if (!page.has_more || page.data.some((row) => row.labels?.[PINNED_LABEL_KEY] == null)) {
+      break;
+    }
+    if (!page.last_id || cursors.has(page.last_id)) {
+      throw new Error("Pinned sessions pagination did not advance");
+    }
+    cursors.add(page.last_id);
+    params.set("after", page.last_id);
+  }
   const conversations = rows.filter((c) => c.labels?.[PINNED_LABEL_KEY] != null);
   // Honored iff the server returned nothing, or everything it returned is
   // actually pinned. An old server returns unfiltered rows (none pinned), so a

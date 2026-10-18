@@ -617,6 +617,62 @@ it("updates pending counts on a pinned row outside the scope windows", () => {
   });
 });
 
+it.each(["snapshot", "changed"] as const)(
+  "refreshes pins when a %s contains the newly created active chat",
+  async (type) => {
+    const client = new QueryClient();
+    seedConversations(client, ["new-chat"]);
+    client.setQueryData(["pinned-conversations"], { conversations: [], filterHonored: true });
+    const newPin = { ...conv("new-chat"), labels: { "omnigent.pinned": "456" } };
+    const fetchPins = vi.fn(async () => ({ conversations: [newPin], filterHonored: true }));
+    const observer = new QueryObserver(client, {
+      queryKey: ["pinned-conversations"],
+      queryFn: fetchPins,
+      staleTime: Infinity,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    renderProvider(client, ["/c/new-chat"]);
+    act(() =>
+      frameHandler()({
+        type,
+        items: [{ ...wireItem("new-chat", 0, 0), labels: newPin.labels }],
+      }),
+    );
+    await waitFor(() => expect(observer.getCurrentResult().data?.conversations).toEqual([newPin]));
+    expect(fetchPins).toHaveBeenCalledTimes(1);
+    // Status updates carrying the same pin do not repeatedly fetch the queue.
+    act(() =>
+      frameHandler()({
+        type: "changed",
+        items: [{ ...wireItem("new-chat", 0, 0), labels: newPin.labels }],
+      }),
+    );
+    expect(fetchPins).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    client.clear();
+  },
+);
+
+it("refreshes the review queue after another device unpins a chat", async () => {
+  const client = new QueryClient();
+  seedConversations(client, ["accepted"]);
+  client.setQueryData(["pinned-conversations"], {
+    conversations: [{ ...conv("accepted"), labels: { "omnigent.pinned": "123" } }],
+    filterHonored: true,
+  });
+  const observer = new QueryObserver(client, {
+    queryKey: ["pinned-conversations"],
+    queryFn: async () => ({ conversations: [] as Conversation[], filterHonored: true }),
+    staleTime: Infinity,
+  });
+  const unsubscribe = observer.subscribe(() => {});
+  renderProvider(client, ["/c/accepted"]);
+  act(() => frameHandler()({ type: "changed", items: [wireItem("accepted", 0, 0)] }));
+  await waitFor(() => expect(observer.getCurrentResult().data?.conversations).toEqual([]));
+  unsubscribe();
+  client.clear();
+});
+
 it("keeps a directly opened shared session watched and permission-aware with the Shared list inactive", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const mine = conv("mine");

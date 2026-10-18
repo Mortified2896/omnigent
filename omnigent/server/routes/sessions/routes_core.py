@@ -198,6 +198,7 @@ from omnigent.server.schemas import (
     SessionResponse,
     UpdateSessionRequest,
 )
+from omnigent.server.session_pins import initial_session_labels
 from omnigent.server.session_version import SessionMutationFingerprint, session_etag
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
@@ -3469,6 +3470,7 @@ def register_core_routes(
         # Workspace-rail tab). Stamp the label the sessions-list filter reads.
         if body.side_chat:
             extra_labels[SIDE_CHAT_LABEL_KEY] = "1"
+        extra_labels = initial_session_labels(extra_labels, user_id=user_id)
         if feedback_snapshot is not None:
             from omnigent.server.feedback_discussion import PREFIX
 
@@ -3864,6 +3866,7 @@ def register_core_routes(
             permission_level=level,
             last_task_error=None,
             agent_name=base_agent.name,
+            viewer_id=user_id,
         )
 
     # ── POST /sessions/{session_id}/switch-agent (reserved) ──────

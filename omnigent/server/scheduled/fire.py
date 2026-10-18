@@ -71,6 +71,7 @@ from omnigent.server.routes._session_create_validation import (
 )
 from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND, scheduled_audio_voice
 from omnigent.server.schemas import SessionEventInput
+from omnigent.server.session_pins import initial_session_labels
 
 _logger = logging.getLogger(__name__)
 
@@ -897,6 +898,7 @@ async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int
         host_id=task.host_id,
         workspace=task.workspace,
         terminal_launch_args=await _permission_mode_launch_args(deps, task),
+        labels=initial_session_labels(None, user_id=task.user_id),
     )
     reasoning_effort = task.reasoning_effort
     if reasoning_effort is None:

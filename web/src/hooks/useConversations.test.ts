@@ -1739,6 +1739,34 @@ describe("fetchPinnedConversations filter-honored detection", () => {
     expect(result.conversations).toEqual([]);
   });
 
+  it("keeps reviews visible beyond the first 30 pinned chats", async () => {
+    const first = Array.from({ length: 30 }, (_, i) => pinnedRow(`conv_${i}`));
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({ data: first, has_more: true, last_id: "conv_29" }))
+      .mockResolvedValueOnce(
+        mockResponse({
+          data: [pinnedRow("older-review")],
+          has_more: false,
+          last_id: "older-review",
+        }),
+      );
+    const result = await fetchPinnedConversations(false);
+    expect(result.filterHonored).toBe(true);
+    expect(result.conversations).toHaveLength(31);
+    expect(result.conversations.map((row) => row.id)).toContain("older-review");
+    const next = new URL(fetchMock.mock.calls[1][0], "http://localhost");
+    expect(next.searchParams.get("after")).toBe("conv_29");
+    expect(next.searchParams.get("pinned")).toBe("true");
+  });
+
+  it("rejects a stuck pin cursor instead of looping or hiding reviews", async () => {
+    fetchMock.mockResolvedValue(
+      mockResponse({ data: [pinnedRow("conv_a")], has_more: true, last_id: "conv_a" }),
+    );
+    await expect(fetchPinnedConversations(false)).rejects.toThrow("pagination did not advance");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("reports NOT honored and drops unpinned rows when an old server ignores the filter", async () => {
     // Old server: returns the normal first page — none carry the pin label.
     fetchMock.mockResolvedValueOnce(

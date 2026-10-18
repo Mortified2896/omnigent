@@ -36,6 +36,7 @@ import {
   insertNewRowsIntoPages,
   mergeItemsIntoPages,
   nullsToUndefined,
+  PINNED_LABEL_KEY,
   PROJECT_LABEL_KEY,
   removeIdsFromPages,
 } from "@/lib/sessionListCache";
@@ -396,6 +397,25 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
           return;
         case "snapshot":
         case "changed": {
+          // New chats arrive already pinned. Reconcile this independent query
+          // even when the active chat is excluded from ordinary list refetches.
+          // The same check picks up pin/unpin decisions from another device.
+          const pinned =
+            queryClient.getQueryData<PinnedConversationsResult>(PINNED_CONVERSATIONS_KEY);
+          if (pinned) {
+            const pinTimes = new Map(
+              pinned.conversations.map((row) => [row.id, row.labels[PINNED_LABEL_KEY]]),
+            );
+            const pinsChanged = frame.items.some(
+              (item) =>
+                item.labels !== undefined &&
+                (item.archived ? undefined : item.labels[PINNED_LABEL_KEY]) !==
+                  pinTimes.get(item.id),
+            );
+            if (pinsChanged) {
+              void queryClient.invalidateQueries({ queryKey: PINNED_CONVERSATIONS_KEY });
+            }
+          }
           seedReadState(frame.items);
           syncCommentsFingerprints(frame.items);
           if (frame.type === "snapshot") {

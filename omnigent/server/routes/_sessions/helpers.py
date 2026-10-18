@@ -290,6 +290,7 @@ from omnigent.server.schemas import (
     ToolOutputDeltaEvent,
 )
 from omnigent.server.session_metadata_logging import harness_attributes
+from omnigent.server.session_pins import initial_session_labels
 from omnigent.spec.types import (
     AgentSpec,
     Phase,
@@ -10247,7 +10248,11 @@ def _persist_stored_session_bundle(
             agent_bundle_location=agent_bundle_location,
             agent_description=agent_description,
             title=metadata.title,
-            labels=metadata.labels,
+            labels=initial_session_labels(
+                metadata.labels,
+                user_id=created_by,
+                parent_session_id=metadata.parent_session_id,
+            ),
             reasoning_effort=metadata.reasoning_effort,
             workspace=metadata.workspace,
             terminal_launch_args=metadata.terminal_launch_args,

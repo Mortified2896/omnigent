@@ -532,6 +532,19 @@ Fields:
 
 Two request shapes are accepted.
 
+New top-level chats start pinned for their creator, including project chats,
+uploaded-bundle sessions, scheduled-task chats, and ordinary forks. Pins form a
+review queue: after reviewing an outcome, unpin with `PATCH /v1/sessions/{id}` and
+`{"labels":{"omnigent.pinned":""}}`. The choice persists across devices and
+later messages do not re-pin the chat. Existing chats are not backfilled;
+sub-agent children and hidden side chats are not automatically pinned.
+
+The API exposes the creator/viewer's pin as `labels["omnigent.pinned"]`, an
+epoch-millisecond timestamp, while storage keeps each user's pin separate.
+An explicit canonical pin value in create labels overrides the default; an
+empty value starts that session unpinned. Client-supplied per-user pin keys
+remain rejected.
+
 #### Create From Uploaded Agent Bundle
 
 ```

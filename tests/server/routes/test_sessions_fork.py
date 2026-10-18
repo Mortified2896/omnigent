@@ -1361,9 +1361,10 @@ async def test_fork_codex_bypass_stamps_label_on_codex_target(
 
     assert resp.status_code == 201, f"got {resp.status_code}: {resp.text}"
     extra = conv_store.fork_calls[0]["extra_labels"]
-    assert extra == {"omnigent.codex_native.bypass_sandbox": "1"}, (
-        f"bypass opt-in must stamp the codex bypass label, got {extra!r}"
-    )
+    assert int(extra["omnigent.pinned.local"]) > 0
+    assert {k: v for k, v in extra.items() if k != "omnigent.pinned.local"} == {
+        "omnigent.codex_native.bypass_sandbox": "1"
+    }, f"bypass opt-in must stamp the codex bypass label, got {extra!r}"
 
 
 @pytest.mark.asyncio
