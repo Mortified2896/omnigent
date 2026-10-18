@@ -66,6 +66,10 @@ available integrations and enable a specialist such as `anki`, `shadcn`,
 for example, "Enable Anki for this chat." Activation uses Codex's supported
 `config/mcpServer/reload` API; native MCP tools refresh on the next model step.
 Enabling requests a connection and does not prove the server is healthy.
+For a cold server whose tools are still missing, the agent calls `list` with
+the server name to wait for startup and read its actual runtime status and
+tool names before continuing. A failed underlying service remains a connection
+or tool error; activation does not repair that service.
 
 Selections survive resuming that chat and do not change other chats or
 `~/.codex/config.toml`. Globally disabled MCPs remain unavailable. The tool

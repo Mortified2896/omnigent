@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -181,3 +183,59 @@ def test_activation_is_governed_by_native_policy_hook(event: str) -> None:
     assert request is not None
     data = request["event"]["data" if event == "PreToolUse" else "request_data"]
     assert data == {"name": "mcp__omnigent__sys_mcp_servers", "arguments": arguments}
+
+
+def test_list_reports_native_readiness_without_exposing_transport_config(
+    session: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mcp.call_activation_tool(session, {"action": "enable", "name": "anki"})
+    status = AsyncMock(return_value={"anki": {"runtime_status": "connected", "tools": ["stats"]}})
+    monkeypatch.setattr(mcp, "_runtime_status", status)
+    result = mcp.call_activation_tool(session, {"action": "list", "name": "anki"})
+    status.assert_awaited_once_with(session, {"anki"})
+    payload = json.loads(result["content"][0]["text"])
+    anki = next(server for server in payload["servers"] if server["name"] == "anki")
+    assert anki["runtime_status"] == "connected" and anki["tools"] == ["stats"]
+    assert "private-value" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("final_status", ["connected", "failed"])
+def test_runtime_readiness_waits_for_slow_start_and_hides_transport_errors(
+    session: Path, monkeypatch: pytest.MonkeyPatch, final_status: str
+) -> None:
+    from omnigent.harnesses.codex_native import bridge as codex_bridge
+
+    native = codex_bridge.CodexNativeBridgeState(
+        session_id="test",
+        socket_path="ws://localhost:1234",
+        thread_id="thread",
+        codex_home="/home",
+    )
+    monkeypatch.setattr(codex_bridge, "read_bridge_state", lambda path: native)
+    statuses = ["starting", final_status]
+    client = SimpleNamespace(
+        connect=AsyncMock(),
+        close=AsyncMock(),
+        request=AsyncMock(
+            side_effect=[
+                {
+                    "result": {
+                        "data": [
+                            {
+                                "name": "anki",
+                                "runtimeStatus": status,
+                                "tools": {},
+                                "toolsError": "private-value",
+                            }
+                        ]
+                    }
+                }
+                for status in statuses
+            ]
+        ),
+    )
+    monkeypatch.setattr(app_server, "CodexAppServerClient", lambda **kwargs: client)
+    result = asyncio.run(mcp._runtime_status(session, {"anki"}))
+    assert result == {"anki": {"runtime_status": final_status, "tools": []}}
+    assert client.request.await_count == 2
+    client.close.assert_awaited_once()

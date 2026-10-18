@@ -94,7 +94,10 @@ def activation_tool_schema(bridge_dir: Path) -> dict[str, Any] | None:
         "description": (
             "Manage specialist MCP servers for this chat only. They are stopped until needed. "
             "Before a task needs an integration, enable its server here; its native MCP tools "
-            "become available on the next step. Use list to inspect activation. Disable when "
+            "refresh on the next step. A cold server may take longer: if its tools are missing, "
+            "call list with its name to wait for startup and inspect runtime status and tool "
+            "names, then discover and use its native tools. Do not give up just because tools "
+            "are initially absent. Disable when "
             "finished if useful. This preserves the user's global Codex configuration. "
             "Available specialists: " + ", ".join(specialists) + "."
         ),
@@ -130,6 +133,56 @@ async def _reload_servers(bridge_dir: Path) -> None:
             await client.request("config/mcpServer/reload", {})
     finally:
         await client.close()
+
+
+async def _runtime_status(bridge_dir: Path, names: set[str]) -> dict[str, dict[str, Any]]:
+    """Wait for Codex's startup result on a later tool step; return no config or errors."""
+    from omnigent.harnesses.codex_native.app_server import CodexAppServerClient
+    from omnigent.harnesses.codex_native.bridge import read_bridge_state
+
+    state = read_bridge_state(bridge_dir)
+    if state is None or not names:
+        return {}
+    address = state.socket_path
+    client = (
+        CodexAppServerClient(ws_url=address, client_name="omnigent-mcp-status")
+        if address.startswith(("ws://", "wss://"))
+        else CodexAppServerClient(socket_path=Path(address), client_name="omnigent-mcp-status")
+    )
+    result = {}
+    try:
+        async with asyncio.timeout(40):
+            await client.connect()
+            for name in sorted(names):
+                while True:
+                    response = await client.request(
+                        "mcpServerStatus/list",
+                        {
+                            "threadId": state.thread_id,
+                            "serverName": name,
+                            "detail": "toolsAndAuthOnly",
+                        },
+                    )
+                    payload = response.get("result")
+                    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                        break
+                    for server in payload["data"]:
+                        if isinstance(server, dict) and server.get("name") == name:
+                            result[name] = {
+                                "runtime_status": server.get("runtimeStatus", "unknown"),
+                                "tools": sorted(server.get("tools", {})),
+                            }
+                    status = result.get(name, {}).get("runtime_status")
+                    if status not in {"starting", "connecting"}:
+                        break
+                    await asyncio.sleep(0.25)
+    except (OSError, RuntimeError, ValueError, WebSocketException):
+        # A timeout is a pending/unknown runtime, never a reason to change the
+        # saved selection or print a transport error containing credentials.
+        pass
+    finally:
+        await client.close()
+    return result
 
 
 def call_activation_tool(bridge_dir: Path, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -192,19 +245,30 @@ def call_activation_tool(bridge_dir: Path, arguments: dict[str, Any]) -> dict[st
                             "Codex could not reload MCP configuration; its config was restored. "
                             "Retry when the native chat is connected."
                         ) from None
+            runtime = {}
+            if action == "list":
+                names = set(state["active"])
+                if name is not None:
+                    if not isinstance(name, str) or name not in state["available"]:
+                        raise ActivationError("Choose an available server from the list action")
+                    names &= {name}
+                runtime = asyncio.run(_runtime_status(bridge_dir, names))
             result = {
                 "servers": [
                     {
                         "name": server,
                         "enabled": server in state["active"],
                         "startup": server in state["always"],
+                        **runtime.get(server, {}),
                     }
                     for server in state["available"]
                 ],
                 "note": (
                     "Activation is scoped to this chat and retained when it resumes. "
                     "Changed servers refresh on the next model step. Enabled means requested; "
-                    "a server can still fail to connect. Use its native tools after activation."
+                    "a server can still fail to connect. If tools are missing, call list with "
+                    "the server name to wait for startup and check runtime_status. Retry list "
+                    "if runtime_status is absent or still starting, then use its native tools."
                 ),
             }
             return {"content": [{"type": "text", "text": json.dumps(result)}]}
