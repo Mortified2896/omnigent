@@ -10590,6 +10590,75 @@ describe("managed sandbox inference models", () => {
     );
     mounted.unmount();
   });
+  it("preserves the Claude subscription connection when Advisor also offers the same Codex model", async () => {
+    const model = {
+      id: "gpt-6.1-sol",
+      model: "gpt-6.1-sol",
+      displayName: "GPT-6.1-Sol · Claude Code",
+      accessLane: "claude-codex" as const,
+      isDefault: true,
+      defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: [{ reasoningEffort: "medium" }],
+    };
+    mockModelQueries((harness) => ({
+      ...SUCCESS_QUERY_STATE,
+      data: [
+        { ...model, accessLane: harness === "claude-native" ? "claude-codex" : "codex-direct" },
+      ],
+    }));
+    const choices = ["codex-direct", "claude-codex"].map((lane) => ({
+      choice_id: `choice-${lane}`,
+      provider: "openai",
+      model_id: model.id,
+      display_name: model.displayName,
+      reasoning_effort: "medium",
+      model_ids: [model.id],
+      access_lanes: [lane],
+      default_access_lanes: [lane],
+      available: true,
+    }));
+    const provider = {
+      enabled: true,
+      collapsed: false,
+      selected_choice_ids: choices.map((choice) => choice.choice_id),
+      disabled_model_ids: [],
+      transport_preference: "direct_only",
+    };
+    authenticatedFetchMock.mockImplementation(async (url) => {
+      if (String(url).includes("/model-advisor/catalog"))
+        return Response.json({ catalog_revision: "test", options: [], logical_options: choices });
+      if (String(url).includes("/model-advisor/preferences"))
+        return Response.json({
+          version: 1,
+          etag: "test",
+          logical_preferences: {
+            schema_version: 3,
+            enabled: true,
+            providers: {
+              openai: provider,
+              glm: { ...provider, enabled: false, selected_choice_ids: [] },
+            },
+            advisor_model_mode: "jev",
+            advisor_choice_id: null,
+            human_probability_percent: 0,
+            unresolved_legacy_ids: [],
+            route_review_required: [],
+          },
+        });
+      return Response.json({});
+    });
+    renderLanding({ features: { model_advisor: true } });
+    selectAgent("a1");
+    await waitFor(() => {
+      expect(readHarnessOptions("claude-native").accessLane).toBe("claude-codex");
+      expect(screen.queryByText(/Choose an allowed model/)).toBeNull();
+    });
+    openAgentModels("a1");
+    expect(
+      screen.getByTestId("new-chat-landing-agent-model-gpt-6.1-sol-claude-codex"),
+    ).toBeVisible();
+  });
+
   it("restricts composer models and efforts to the Advisor pool and restores all choices when off", async () => {
     const executionModels = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"].map((id, index) => ({
       id,

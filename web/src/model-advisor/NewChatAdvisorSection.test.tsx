@@ -634,6 +634,44 @@ it("requires the exact lane, model, and reasoning effort", async () => {
   expect(screen.getByText(/Choose an allowed model/)).toBeDefined();
 });
 
+it.each(["codex-direct", "claude-codex"])(
+  "distinguishes the same model and effort on the %s harness connection",
+  async (accessLane) => {
+    const claudeChoice = {
+      ...LOGICAL_A,
+      choice_id: "choice-claude-medium",
+      harness: "claude-native",
+      access_lanes: ["claude-codex"],
+      default_access_lanes: ["claude-codex"],
+    };
+    catalog.logical_options = [LOGICAL_A, claudeChoice, LOGICAL_B];
+    const preferences = {
+      ...V2_PREFERENCES,
+      providers: {
+        ...V2_PREFERENCES.providers,
+        openai: {
+          ...V2_PREFERENCES.providers.openai,
+          selected_choice_ids: [LOGICAL_A.choice_id, claudeChoice.choice_id],
+        },
+      },
+    };
+    prefsDto = { ...prefsDto, preferences, logical_preferences: preferences };
+    mountSection({
+      humanPick: { model: "gpt-6.1-sol", accessLane, effort: "medium" },
+    });
+    await screen.findByRole("region", { name: "Model advisor settings" });
+    send();
+    await waitFor(() => expect(screen.getByLabelText("Review model assignment")).toBeDefined());
+    const posted = api.mock.calls.find(
+      ([url, options]) => url === "/v1/model-advisor/rounds" && options?.method === "POST",
+    );
+    assert(posted !== undefined);
+    expect(JSON.parse((posted[1] as RequestInit).body as string).human_choice_id).toBe(
+      accessLane === "claude-codex" ? claudeChoice.choice_id : LOGICAL_A.choice_id,
+    );
+  },
+);
+
 it("maps the composer Default effort to the host catalog's lane-specific default choice", async () => {
   mountSection({
     humanPick: { model: "codex/gpt-6.1-sol", accessLane: "codex-direct", effort: "" },

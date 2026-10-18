@@ -483,7 +483,15 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
                 option.access_lanes.includes(lane),
             )),
     );
-    return matches.length === 1 ? matches[0].choice_id : null;
+    if (matches.length === 1) return matches[0].choice_id;
+    // Codex and Claude can share a model and effort. Disambiguate their
+    // harnesses using the composer connection, while a unique logical choice
+    // still tolerates a stale connection (the server owns transport selection).
+    const connectionMatches = matches.filter(
+      (option) =>
+        humanPick.accessLane !== null && option.access_lanes.includes(humanPick.accessLane),
+    );
+    return connectionMatches.length === 1 ? connectionMatches[0].choice_id : null;
   }, [humanPick, options]);
 
   const validation = useMemo(() => {

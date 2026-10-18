@@ -78,6 +78,8 @@ previous server-owned transport binding atomically with the new configuration;
 the confirmed round and existing response attribution stay unchanged. Later
 ordinary turns do not inherit an Advisor review of the initial prompt. Advisor
 pool settings constrain Advisor recommendations, not the user's manual controls.
+When Codex and Claude Code offer the same model and reasoning level, the
+composer also matches the selected connection to identify the exact choice.
 
 **Jev Router** is selectable in the Recommender model picker. Selecting it
 defaults to using Jev's recommendation (0% human assignment); the comparison
