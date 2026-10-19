@@ -108,7 +108,9 @@ qualify. Jev sees a separate Claude Code choice for the same checkpoint, and
 launch checks the frozen subscription and bridge identity again.
 
 The local bridge handles text and function-tool coding turns. It buffers each
-API response through its next tool or completion boundary. Multimodal requests,
+API response through its next tool or completion boundary. Its ten-minute
+inactivity timeout renews with each Codex event, so active long reasoning and
+tool-call generation are not cut off by a fixed response deadline. Multimodal requests,
 server-side Anthropic tools and Anthropic-specific billing are outside this
 compatibility route. Keep it bound to loopback and its credential private.
 
@@ -125,6 +127,15 @@ current native harness and may change its model or effort; start a new chat to
 change harness. The native Claude launch rechecks the frozen account, model,
 effort and connection before starting, so an account or gateway change blocks
 the old route instead of silently using a different billing lane.
+
+## Scheduled report folders
+
+A folder's `scheduled_task_ids` config binds new runs of those automations to
+that folder. The scheduler resolves bindings only among the task owner's
+folders in the current workspace; an empty local owner resolves to `local`.
+Missing or ambiguous bindings leave the run unfiled. Scheduled runs are not
+automatically pinned, so a report assigned to Reports stays visible there.
+Interactive chats retain their automatic creation-time pins.
 
 ## Local tracing and outcomes
 

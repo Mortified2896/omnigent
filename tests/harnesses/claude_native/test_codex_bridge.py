@@ -206,3 +206,55 @@ async def test_claude_mcp_tool_names_are_translated_and_restored(monkeypatch):
     )
     response = await bridge.response(body, turn)
     assert response["content"][0]["name"] == "mcp__fixture__Read"
+
+
+@pytest.mark.asyncio
+async def test_response_allows_long_reasoning_and_renews_timeout_on_progress(monkeypatch):
+    from omnigent.harnesses.claude_native import codex_bridge
+
+    # Model long, silent reasoning followed by a long generation without a
+    # wall-clock sleep. A fixed three-minute deadline cancels this healthy turn.
+    clock = [0.0]
+    pauses = iter([240.0, 240.0, 240.0])
+    events = asyncio.Queue()
+    await events.put({"method": "item/reasoning/textDelta", "params": {"delta": "thinking"}})
+    await events.put({"method": "item/agentMessage/delta", "params": {"delta": "done"}})
+    await events.put({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+
+    async def wait_for(awaitable, timeout):
+        pause = next(pauses)
+        if pause > timeout:
+            awaitable.close()
+            raise TimeoutError
+        clock[0] += pause
+        return await awaitable
+
+    async def close():
+        pass
+
+    bridge = Bridge({})
+    monkeypatch.setattr(codex_bridge, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(codex_bridge, "asyncio", SimpleNamespace(wait_for=wait_for))
+    turn = Turn(SimpleNamespace(events=events, close=close), "fixture-model", "", "", "max", "t")
+
+    response = await bridge.response({}, turn)
+
+    assert response["content"] == [{"type": "text", "text": "done"}]
+    assert response["stop_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_response_still_times_out_when_codex_is_silent(monkeypatch):
+    from omnigent.harnesses.claude_native import codex_bridge
+
+    async def wait_for(awaitable, timeout):
+        awaitable.close()
+        assert 180 < timeout <= 900
+        raise TimeoutError
+
+    bridge = Bridge({})
+    monkeypatch.setattr(codex_bridge, "asyncio", SimpleNamespace(wait_for=wait_for))
+    turn = Turn(SimpleNamespace(events=asyncio.Queue()), "fixture-model", "", "", "max", "t")
+
+    with pytest.raises(TimeoutError):
+        await bridge.response({}, turn)

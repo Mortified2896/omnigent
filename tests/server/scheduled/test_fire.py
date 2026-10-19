@@ -462,7 +462,9 @@ async def test_active_creates_session_grant_and_run(user_id: str | None) -> None
     assert perm.grants[0][2] == LEVEL_OWNER
     # The launch seam was invoked.
     assert len(launched) == 1
-    assert int(launched[0][0].labels[f"omnigent.pinned.{owner}"]) > 0
+    # Scheduled reports stay in their assigned folder instead of the review queue.
+    assert "omnigent.pinned" not in launched[0][0].labels
+    assert f"omnigent.pinned.{owner}" not in launched[0][0].labels
     # A run row was recorded and last_run_* stamped on the task.
     assert len(store.runs) == 1
     assert any("last_run_at" in u for u in store.updates)
@@ -2041,11 +2043,12 @@ async def test_session_title_includes_run_date_in_task_timezone(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "", RESERVED_USER_LOCAL, "owner"])
 @pytest.mark.parametrize(
     "bindings,expected", [([], None), (["task_1"], "project_1"), (["other"], None)]
 )
 async def test_scheduled_project_binding_is_explicit_and_owner_scoped(
-    bindings: list[str], expected: str | None
+    bindings: list[str], expected: str | None, user_id: str | None
 ) -> None:
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -2059,10 +2062,35 @@ async def test_scheduled_project_binding_is_explicit_and_owner_scoped(
     ]
     deps = _deps(FakeScheduledTaskStore(), conversation_store=store)
     deps.project_store = projects
-    task = _task(user_id="owner")
+    task = _task(user_id=user_id)
     await _create_session(deps, task, 1790463600)
-    projects.list.assert_called_once_with(user_id="owner")
+    projects.list.assert_called_once_with(user_id=user_id or RESERVED_USER_LOCAL)
     assert store.created[0]["project_id"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", [None, "alice@example.com"])
+async def test_scheduled_report_uses_owners_saved_folder(db_uri: str, user_id: str | None) -> None:
+    import uuid
+
+    from omnigent.server.scheduled.fire import _create_session
+    from omnigent.stores.project_store.sqlalchemy_store import SqlAlchemyProjectStore
+
+    projects = SqlAlchemyProjectStore(db_uri)
+    project_ids = {}
+    for owner in [None, RESERVED_USER_LOCAL, "alice@example.com", "bob@example.com"]:
+        project_ids[owner] = uuid.uuid4().hex
+        projects.create(
+            project_ids[owner], "Reports", owner, config={"scheduled_task_ids": ["task_1"]}
+        )
+    store = FakeConversationStore()
+    deps = _deps(FakeScheduledTaskStore(), conversation_store=store)
+    deps.project_store = projects
+
+    conv = await _create_session(deps, _task(user_id=user_id), 1790463600)
+
+    assert store.created[0]["project_id"] == project_ids[user_id or RESERVED_USER_LOCAL]
+    assert not any(key.startswith("omnigent.pinned") for key in conv.labels)
 
 
 @pytest.mark.asyncio

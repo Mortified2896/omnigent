@@ -29,6 +29,10 @@ from starlette.routing import Route
 
 BRIDGE_PROTOCOL = "omnigent-codex-subscription-bridge-v1"
 
+# Max-effort reasoning can be silent for several minutes. Bound inactivity,
+# not the total response duration: each Codex event renews this wait.
+_RESPONSE_IDLE_TIMEOUT_SECONDS = 600
+
 
 class RpcRejected(RuntimeError):
     def __init__(self, method: str, error: dict):
@@ -359,11 +363,8 @@ class Bridge:
     async def response(self, body: dict, turn: Turn):
         content = []
         text = ""
-        deadline = time.monotonic() + 180
         while True:
-            row = await asyncio.wait_for(
-                turn.rpc.events.get(), max(0.1, deadline - time.monotonic())
-            )
+            row = await asyncio.wait_for(turn.rpc.events.get(), _RESPONSE_IDLE_TIMEOUT_SECONDS)
             method, params = row.get("method"), row.get("params", {})
             if method == "thread/tokenUsage/updated":
                 turn.total = params.get("tokenUsage", {}).get("total") or turn.total

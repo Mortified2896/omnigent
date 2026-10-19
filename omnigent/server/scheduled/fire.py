@@ -71,7 +71,6 @@ from omnigent.server.routes._session_create_validation import (
 )
 from omnigent.server.scheduled.audio import SCHEDULED_AUDIO_BACKEND, scheduled_audio_voice
 from omnigent.server.schemas import SessionEventInput
-from omnigent.server.session_pins import initial_session_labels
 
 _logger = logging.getLogger(__name__)
 
@@ -870,7 +869,10 @@ async def _scheduled_project_id(deps: FireDeps, task: ScheduledTask) -> str | No
     """
     if deps.project_store is None:
         return None
-    projects = await asyncio.to_thread(deps.project_store.list, user_id=task.user_id)
+    # Auth-disabled tasks may have no owner, while their saved folders belong
+    # to the local user. Normalize here without widening the project-store scope.
+    owner = task.user_id or RESERVED_USER_LOCAL
+    projects = await asyncio.to_thread(deps.project_store.list, user_id=owner)
     matches = []
     for project in projects:
         bindings = project.config.get("scheduled_task_ids")
@@ -898,7 +900,6 @@ async def _create_session(deps: FireDeps, task: ScheduledTask, scheduled_at: int
         host_id=task.host_id,
         workspace=task.workspace,
         terminal_launch_args=await _permission_mode_launch_args(deps, task),
-        labels=initial_session_labels(None, user_id=task.user_id),
     )
     reasoning_effort = task.reasoning_effort
     if reasoning_effort is None:
