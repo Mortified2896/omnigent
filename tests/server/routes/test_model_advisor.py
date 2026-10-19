@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from omnigent.db.utils import get_or_create_engine
-from omnigent.errors import OmnigentError
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.model_advisor_binding import decode_transport_binding_label
 from omnigent.model_advisor_provider_policy import LogicalChoice
 from omnigent.model_advisor_repository import AdvisorRepository
@@ -1763,8 +1763,6 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
     """An established thread changes transport once, never replays its input/tools."""
     from unittest.mock import AsyncMock
 
-    import httpx
-
     from omnigent.server.routes.sessions import routes_events
 
     store = _FakeConversationStore()
@@ -1825,9 +1823,9 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
         "unresolved_legacy_ids": [],
         "route_review_required": [],
     }
-    native = SimpleNamespace(delete=AsyncMock(return_value=httpx.Response(200)))
+    reset = AsyncMock()
     ready = AsyncMock(return_value={"recovered": True})
-    monkeypatch.setattr(routes_events, "_get_runner_client", AsyncMock(return_value=native))
+    monkeypatch.setattr(routes_events, "_stop_failed_transport_runner", reset)
     monkeypatch.setattr(routes_events, "_recover_retry_session", ready)
     # The fake store mirrors the server's label-only post-readiness write.
     store.set_labels = lambda sid, labels: store.conversation.labels.update(labels)
@@ -1871,7 +1869,12 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
                 for row in PROVIDER_CATALOG_MODELS
             ]
         if mode == "close_retry":
-            native.delete.side_effect = [httpx.Response(503), httpx.Response(200)]
+            reset.side_effect = [
+                OmnigentError(
+                    "Could not stop the failed runner", code=ErrorCode.RUNNER_UNAVAILABLE
+                ),
+                None,
+            ]
         headers = (
             {**JSON_ALICE, "X-Test-User": "bob@test"} if mode == "unauthorized" else JSON_ALICE
         )
@@ -1882,7 +1885,7 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
             expected = {"busy": 200, "changed_account": 409, "unauthorized": 403}[mode]
             assert response.status_code == expected, response.text
             assert store.updates == []
-            native.delete.assert_not_awaited()
+            reset.assert_not_awaited()
             ready.assert_not_awaited()
             return
         if mode == "close_retry":
@@ -1920,4 +1923,93 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
         assert again.status_code == 200
         assert again.json()["changed"] is False
         assert len(store.updates) == 1
+        ready.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "manual",
+        "manual_after_advisor",
+        "unrelated_claude",
+        "busy",
+        "unsupported_effort",
+        "unauthorized",
+    ],
+)
+def test_manual_omniroute_chat_recovers_direct_without_an_advisor_round(db_uri, monkeypatch, mode):
+    """Manual choices get the same native-thread recovery as Advisor choices."""
+    from unittest.mock import AsyncMock
+
+    from omnigent.server.routes.sessions import routes_events
+
+    conversation = SimpleNamespace(
+        id="manual_chat",
+        host_id="host_1",
+        agent_id="ag_1",
+        workspace="/repo",
+        kind="default",
+        parent_conversation_id=None,
+        live_status="running" if mode == "busy" else "failed",
+        labels={
+            "omnigent.access_lane": "omniroute",
+            "omnigent.last_task_error_code": "codex_turn_error",
+            **({"omnigent.advisor.manual_choice": "1"} if mode == "manual_after_advisor" else {}),
+        },
+        model_override="codex/gpt-5.5",
+        reported_model="gpt-5.5",
+        reasoning_effort="max" if mode == "unsupported_effort" else "medium",
+        external_session_id="keep-this-native-thread",
+    )
+    store = _FakeConversationStore(conversation)
+    store.set_labels = lambda sid, labels: conversation.labels.update(labels)
+    host = _FakeHost("host_1", "alice@test")
+    host.configured_harnesses = {"claude-native": mode == "unrelated_claude"}
+    client, registry = client_for(
+        db_uri,
+        hosts=[host],
+        catalog_models=PROVIDER_CATALOG_MODELS,
+        conversation_store=store,
+        session_authorizer=lambda user, sid: user == "alice@test" and sid == "manual_chat",
+        session_harness_resolver=lambda _: "codex-native",
+    )
+    reset = AsyncMock()
+    ready = AsyncMock(return_value={"recovered": True})
+    monkeypatch.setattr(routes_events, "_stop_failed_transport_runner", reset)
+    monkeypatch.setattr(routes_events, "_recover_retry_session", ready)
+    with client:
+        response = client.post(
+            "/v1/model-advisor/sessions/manual_chat/recover-transport",
+            headers={
+                **JSON_ALICE,
+                **({"X-Test-User": "bob@test"} if mode == "unauthorized" else {}),
+            },
+            json={},
+        )
+        if mode in {"busy", "unsupported_effort", "unauthorized"}:
+            assert (
+                response.status_code
+                == {"busy": 200, "unsupported_effort": 409, "unauthorized": 403}[mode]
+            )
+            assert not store.updates
+            reset.assert_not_awaited()
+            ready.assert_not_awaited()
+            return
+        assert response.status_code == 200, response.text
+        assert response.json()["recovered"] is True
+        assert conversation.model_override == "gpt-5.5"
+        assert conversation.reasoning_effort == "medium"
+        assert conversation.external_session_id == "keep-this-native-thread"
+        assert conversation.labels["omnigent.access_lane"] == "codex-direct"
+        assert conversation.labels["omnigent.transport.fallback_from"] == "omniroute"
+        assert conversation.labels["omnigent.transport.fallback_status"] == "ready"
+        assert conversation.labels["omnigent.advisor.fallback_pending"] == "0"
+        assert not registry.advisor_calls
+        assert all(json.loads(frame).get("harness") == "codex-native" for frame in registry.sent)
+        reset.assert_awaited_once()
+        ready.assert_awaited_once()
+        again = client.post(
+            "/v1/model-advisor/sessions/manual_chat/recover-transport", headers=JSON_ALICE, json={}
+        )
+        assert again.status_code == 200 and again.json()["changed"] is False
         ready.assert_awaited_once()

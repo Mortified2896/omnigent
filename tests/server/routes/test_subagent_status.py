@@ -8,7 +8,7 @@ import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -27,6 +27,109 @@ from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.scheduled_task_store.sqlalchemy_store import SqlAlchemyScheduledTaskStore
 from tests.debug_log_helpers import capture_debug_rows
+
+
+async def test_manual_gateway_failure_schedules_direct_recovery_without_a_retry(
+    status_route: _StatusRoute, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = status_route.parent_id
+    status_route.store.set_labels(sid, {"omnigent.access_lane": "omniroute"})
+    monkeypatch.setattr(
+        routes_events, "_resolve_harness", lambda *_args, **_kwargs: "codex-native"
+    )
+    scheduled = Mock()
+    monkeypatch.setattr(routes_events, "_schedule_transport_recovery", scheduled)
+    response = await status_route.client.post(
+        f"/v1/sessions/{sid}/events",
+        json={
+            "type": "external_session_status",
+            "data": {
+                "status": "failed",
+                "response_id": "codex_failed_gateway_turn",
+                "output": (
+                    "stream disconnected before completion: "
+                    "stream closed before response.completed"
+                ),
+            },
+        },
+    )
+    assert response.status_code == 202, response.text
+    scheduled.assert_called_once()
+    assert scheduled.call_args.args[2] == sid
+    assert status_route.store.get_conversation(sid).live_status == "failed"
+
+
+async def test_automatic_direct_recovery_is_single_flight_and_failure_is_visible(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    sid = uuid4().hex
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail(*_args, **_kwargs):
+        entered.set()
+        await release.wait()
+        raise HTTPException(409, "Direct Codex login is unavailable")
+
+    recovery = AsyncMock(side_effect=fail)
+    monkeypatch.setattr(routes_events, "recover_advisor_session_transport", recovery)
+    store = SimpleNamespace(set_labels=Mock())
+    request = SimpleNamespace()
+    routes_events._schedule_transport_recovery(request, None, sid, store)
+    task = routes_events._transport_recovery_tasks[sid]
+    await entered.wait()
+    routes_events._schedule_transport_recovery(request, None, sid, store)
+    release.set()
+    await task
+    recovery.assert_awaited_once()
+    updates = store.set_labels.call_args.args[1]
+    assert updates["omnigent.transport.fallback_status"] == "failed"
+    assert updates["omnigent.transport.fallback_from"] == "omniroute"
+    assert "Direct Codex login is unavailable" in updates["omnigent.transport.fallback_error"]
+    assert sid not in routes_events._transport_recovery_tasks
+
+
+@pytest.mark.parametrize("mode", ["stopped", "active_child", "stop_failed"])
+async def test_direct_recovery_restarts_the_dedicated_runner_without_deleting_history(
+    monkeypatch, mode
+):
+    from types import SimpleNamespace
+
+    conv = SimpleNamespace(
+        id="failed_chat",
+        runner_id="failed_runner",
+        host_id="host",
+        external_session_id="same-thread",
+    )
+    store = SimpleNamespace(
+        list_conversations_by_runner_id=Mock(return_value=[conv]),
+        clear_runner_liveness=Mock(),
+        clear_runner_id=Mock(),
+    )
+    if mode == "active_child":
+        store.list_conversations_by_runner_id.return_value.append(
+            SimpleNamespace(id="child", live_status="running")
+        )
+    stop = AsyncMock(return_value=mode != "stop_failed")
+    from omnigent.server.routes._sessions import helpers
+
+    monkeypatch.setattr(helpers, "_stop_session_host_runner", stop)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(host_registry=Mock())))
+    if mode != "stopped":
+        with pytest.raises(OmnigentError):
+            await routes_events._stop_failed_transport_runner(request, conv.id, conv, store)
+        store.clear_runner_id.assert_not_called()
+        if mode == "active_child":
+            stop.assert_not_awaited()
+        return
+    await routes_events._stop_failed_transport_runner(request, conv.id, conv, store)
+    stop.assert_awaited_once()
+    store.clear_runner_liveness.assert_called_once_with("failed_runner")
+    store.clear_runner_id.assert_called_once_with("failed_chat")
+    assert conv.external_session_id == "same-thread"
+
 
 _BACKGROUND_TASK = BackgroundTaskInfo(status="running", description="Wait for CI")
 

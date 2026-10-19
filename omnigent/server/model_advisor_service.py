@@ -83,13 +83,28 @@ from omnigent.stores.host_store import HostStore
 _logger = logging.getLogger("omnigent.server.model_advisor")
 
 
-def _direct_fallback_notice_labels(reason: str) -> dict[str, str]:
+def _direct_fallback_notice_labels(reason: str, *, status: str = "ready") -> dict[str, str]:
     """Keep fallback provenance visible after recovery and later replies."""
     return {
         "omnigent.transport.fallback_from": "omniroute",
         "omnigent.transport.fallback_reason": reason,
         "omnigent.transport.fallback_at": str(time.time()),
+        "omnigent.transport.fallback_status": status,
+        "omnigent.transport.fallback_error": "",
     }
+
+
+_RECOVERABLE_CODEX_TRANSPORT_ERRORS = frozenset(
+    {
+        "codex_turn_error",
+        "codex_reauth_required",
+        "transient_upstream_error",
+        "connection_error",
+        "runner_unavailable",
+        "native_terminal_start_failed",
+        "rate_limit_exceeded",
+    }
+)
 
 
 def _set_observational_attributes(span: Any, attributes: dict[str, str | int]) -> None:
@@ -590,7 +605,9 @@ class ModelAdvisorService:
 
     # ── catalog ──────────────────────────────────────────────
 
-    async def load_catalog(self, user_id: str | None, host_id: str) -> HostCatalog:
+    async def load_catalog(
+        self, user_id: str | None, host_id: str, *, include_claude: bool = True
+    ) -> HostCatalog:
         """Fetch and qualify the host's live codex model options."""
         self._authorized_host(user_id, host_id)
         conn = self._live_host_connection(self._host_store.get_host(host_id))
@@ -617,7 +634,7 @@ class ModelAdvisorService:
         models = result.get("models")
         rows = [row for row in models if isinstance(row, dict)] if isinstance(models, list) else []
         configured = getattr(self._host_store.get_host(host_id), "configured_harnesses", {}) or {}
-        if configured.get("claude-native") is True:
+        if include_claude and configured.get("claude-native") is True:
             try:
                 claude_result = await request_host_model_options(
                     host_registry=self._host_registry,
@@ -2065,7 +2082,7 @@ class ModelAdvisorService:
         labels = conv.labels or {}
         raw_plan = decode_transport_binding_label(labels, ADVISOR_TRANSPORT_PLAN_LABEL_KEY)
         if raw_plan is None or labels.get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) == "1":
-            return {"changed": False}
+            return await self._recover_manual_session_transport(user_id, conv)
         if not isinstance(raw_plan, str):
             raise HTTPException(409, "The saved Advisor transport plan is invalid")
         try:
@@ -2085,14 +2102,7 @@ class ModelAdvisorService:
             return {"changed": False, "route_id": fallback.route_id}
         if conv.live_status != "failed":
             return {"changed": False}
-        if labels.get("omnigent.last_task_error_code") not in {
-            "codex_turn_error",
-            "transient_upstream_error",
-            "connection_error",
-            "runner_unavailable",
-            "native_terminal_start_failed",
-            "rate_limit_exceeded",
-        }:
+        if labels.get("omnigent.last_task_error_code") not in _RECOVERABLE_CODEX_TRANSPORT_ERRORS:
             return {"changed": False}
         if labels.get(ADVISOR_LOGICAL_CHOICE_LABEL_KEY) != plan.choice.choice_id:
             raise HTTPException(409, "The saved Advisor choice has changed")
@@ -2113,7 +2123,7 @@ class ModelAdvisorService:
         host_id, agent_id, workspace = conv.host_id, conv.agent_id, conv.workspace
         if not host_id or not agent_id or not workspace:
             raise HTTPException(409, "The Advisor session has no resumable host binding")
-        catalog = await self.load_catalog(user_id, host_id)
+        catalog = await self.load_catalog(user_id, host_id, include_claude=False)
         qualified = next(
             (
                 route
@@ -2135,7 +2145,9 @@ class ModelAdvisorService:
                 409, "The direct Codex fallback is no longer available for this account"
             )
         updated_labels = {
-            **_direct_fallback_notice_labels(labels["omnigent.last_task_error_code"]),
+            **_direct_fallback_notice_labels(
+                labels["omnigent.last_task_error_code"], status="recovering"
+            ),
             **encode_transport_binding_label(
                 ADVISOR_DISPATCH_ROUTE_LABEL_KEY,
                 json.dumps(qualified.to_payload(), sort_keys=True, separators=(",", ":")),
@@ -2170,6 +2182,109 @@ class ModelAdvisorService:
             },
         )
         return {"changed": True, "route_id": qualified.route_id}
+
+    async def _recover_manual_session_transport(
+        self, user_id: str | None, conv: Conversation
+    ) -> dict[str, Any]:
+        """Select the same checkpoint on the host's authenticated Direct lane.
+
+        A manual model choice does not opt out of transport recovery. Only
+        transport metadata changes; no prompt or tool call is submitted.
+        Advisor-pinned assignments retain the stricter frozen-plan path above.
+        """
+        labels = conv.labels or {}
+        if (
+            labels.get("omnigent.access_lane") != "omniroute"
+            or conv.live_status != "failed"
+            or conv.kind != "default"
+            or conv.parent_conversation_id is not None
+            or labels.get("omnigent.last_task_error_code")
+            not in _RECOVERABLE_CODEX_TRANSPORT_ERRORS
+            or await self._harness_for_session(conv) != "codex-native"
+        ):
+            return {"changed": False}
+        if not conv.host_id or not conv.agent_id or not conv.workspace:
+            raise HTTPException(409, "This chat has no resumable Codex host binding")
+        model = conv.model_override or conv.reported_model
+        if not model:
+            raise HTTPException(409, "The failed chat's model is unknown")
+        original_binding = (
+            conv.model_override,
+            conv.reasoning_effort,
+            conv.external_session_id,
+            labels.get("omnigent.access_lane"),
+        )
+        catalog = await self.load_catalog(user_id, conv.host_id, include_claude=False)
+        from omnigent.models.codex_model_vocabulary import comparable_model_id
+
+        canonical = comparable_model_id(native_codex_model_slug(model))
+        effort = conv.reasoning_effort
+        if effort is None:
+            effort = next(
+                (
+                    option.reasoning_effort
+                    for option in catalog.options
+                    if option.lane_id == "codex-direct"
+                    and option.is_default_effort
+                    and comparable_model_id(native_codex_model_slug(option.model_id)) == canonical
+                ),
+                None,
+            )
+        qualified = next(
+            (
+                route
+                for choice, routes in (
+                    (choice, catalog.routes_by_choice.get(choice.choice_id, ()))
+                    for choice in catalog.logical_choices
+                )
+                if choice.provider == "openai"
+                and choice.harness == "codex-native"
+                and comparable_model_id(choice.model_id) == canonical
+                and choice.reasoning_effort == effort
+                for route in routes
+                if route.ready
+                and route.route_id == "codex-direct"
+                and route.transport == "direct"
+                and route.entitlement_kind == "chatgpt_plan"
+                and route.connection_id
+            ),
+            None,
+        )
+        if qualified is None:
+            raise HTTPException(
+                409, "Direct Codex is unavailable for this chat's model and reasoning level"
+            )
+        fresh = await asyncio.to_thread(self._conversation_store.get_conversation, conv.id)
+        if fresh is None:
+            raise HTTPException(404, "session not found")
+        if original_binding != (
+            fresh.model_override,
+            fresh.reasoning_effort,
+            fresh.external_session_id,
+            (fresh.labels or {}).get("omnigent.access_lane"),
+        ):
+            return {"changed": False}
+        try:
+            updated = await asyncio.to_thread(
+                self._conversation_store.update_conversation,
+                conv.id,
+                model_override=qualified.wire_model,
+                reasoning_effort=conv.reasoning_effort,
+                _unset_reported_model=True,
+                labels={
+                    **_direct_fallback_notice_labels(
+                        labels["omnigent.last_task_error_code"], status="recovering"
+                    ),
+                    "omnigent.access_lane": "codex-direct",
+                    "omnigent.advisor.fallback_pending": "1",
+                },
+                require_idle=True,
+            )
+        except ConversationBusyError as exc:
+            raise HTTPException(409, "Wait for the current response to finish") from exc
+        if updated is None:
+            raise HTTPException(404, "session not found")
+        return {"changed": True, "route_id": "codex-direct"}
 
     async def _apply_provider_route_to_session(
         self,

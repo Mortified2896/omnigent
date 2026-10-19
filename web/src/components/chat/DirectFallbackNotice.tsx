@@ -9,6 +9,27 @@ export function DirectFallbackNotice({ sessionId }: { sessionId: string | null }
   const { session } = useSession(sessionId);
   const queryClient = useQueryClient();
   const status = useChatStore((s) => s.sessionStatus);
+  const labels = session?.labels;
+  const fallbackStatus = labels?.["omnigent.transport.fallback_status"];
+  const awaitingRecovery =
+    fallbackStatus === "recovering" ||
+    (status === "failed" &&
+      labels?.["omnigent.access_lane"] === "omniroute" &&
+      fallbackStatus !== "failed");
+  useEffect(() => {
+    if (!sessionId || !awaitingRecovery) return;
+    // A terminal failure can switch transport while its failed status stays
+    // visible. Briefly refresh that transition; stop on readiness/failure or
+    // after two minutes, rather than polling every idle chat indefinitely.
+    const refresh = () => void queryClient.invalidateQueries({ queryKey: ["session", sessionId] });
+    refresh();
+    const interval = window.setInterval(refresh, 1500);
+    const deadline = window.setTimeout(() => window.clearInterval(interval), 120_000);
+    return () => {
+      window.clearInterval(interval);
+      window.clearTimeout(deadline);
+    };
+  }, [sessionId, awaitingRecovery, queryClient]);
   const previous = useRef({ sessionId, status });
   useEffect(() => {
     // Recovery can change labels without changing the URL. Refresh the shared
@@ -23,8 +44,9 @@ export function DirectFallbackNotice({ sessionId }: { sessionId: string | null }
     }
     previous.current = { sessionId, status };
   }, [sessionId, status, queryClient]);
-  const labels = session?.labels;
   if (labels?.["omnigent.transport.fallback_from"] !== "omniroute") return null;
+  const failed = fallbackStatus === "failed";
+  const recovering = fallbackStatus === "recovering";
   const direct = ["codex-direct", "glm-direct"].includes(labels["omnigent.access_lane"] ?? "");
   const reason = labels["omnigent.transport.fallback_reason"];
   const timestamp = Number(labels["omnigent.transport.fallback_at"]);
@@ -40,14 +62,27 @@ export function DirectFallbackNotice({ sessionId }: { sessionId: string | null }
         <TriangleAlertIcon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
         <div className="min-w-0 text-sm">
           <p className="font-semibold">
-            {direct ? "Direct fallback active" : "This chat used Direct fallback"}
+            {failed
+              ? "Direct fallback failed — OmniRoute is unavailable"
+              : recovering
+                ? "OmniRoute failed — switching to Direct"
+                : direct
+                  ? "Direct fallback active — OmniRoute failed"
+                  : "This chat used Direct fallback"}
           </p>
           <p>
-            {direct
-              ? "OmniRoute failed. This chat is continuing through a Direct connection."
-              : "OmniRoute failed earlier and this chat switched to a Direct connection."}{" "}
+            {failed
+              ? "The Direct connection could not be established. This chat still needs recovery."
+              : recovering
+                ? "Recovering the same conversation through Direct. Your history and completed tool results are preserved."
+                : direct
+                  ? "This chat now uses a Direct connection. Continue here with the same model and conversation history."
+                  : "OmniRoute failed earlier and this chat switched to a Direct connection."}{" "}
             Investigate the gateway issue; a successful reply does not confirm it is fixed.
           </p>
+          {failed && labels["omnigent.transport.fallback_error"] && (
+            <p className="mt-2 font-medium">{labels["omnigent.transport.fallback_error"]}</p>
+          )}
           {(reason || validDate) && (
             <details className="mt-2">
               <summary className="cursor-pointer font-medium">Fallback details</summary>

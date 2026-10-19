@@ -311,6 +311,7 @@ _retry_recovery_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
 _retry_recovery_tasks: WorkspaceScopedCache[str, asyncio.Task[dict[str, bool | str]]] = (
     WorkspaceScopedCache()
 )
+_transport_recovery_tasks: WorkspaceScopedCache[str, asyncio.Task[None]] = WorkspaceScopedCache()
 
 # POST /events types that arrive per streamed chunk — the harness echoing its
 # own live output back. Their per-call audit row is pure noise (the content is
@@ -535,7 +536,7 @@ async def recover_advisor_session_transport(
     *,
     service: Any = None,
 ) -> dict[str, Any]:
-    """Resume the same native thread on its qualified Direct leg, without input."""
+    """Resume an Advisor or manual chat on Direct, without replaying input."""
     service = service or getattr(request.app.state, "model_advisor_service", None)
     if service is None:
         return {"changed": False}
@@ -551,17 +552,7 @@ async def recover_advisor_session_transport(
                 code=ErrorCode.CONFLICT,
             )
         runner_router = getattr(request.app.state, "runner_router", None)
-        runner = await _get_runner_client(session_id, runner_router)
-        if runner is not None:
-            closed = await runner.delete(
-                f"/v1/sessions/{session_id}/resources/terminals/terminal_codex_main",
-                timeout=15.0,
-            )
-            if closed.status_code not in (200, 404):
-                raise OmnigentError(
-                    "Could not close the failed Codex connection; retry recovery",
-                    code=ErrorCode.RUNNER_UNAVAILABLE,
-                )
+        await _stop_failed_transport_runner(request, session_id, conv, store)
         initializer = getattr(request.app.state, "runner_session_initializer", None)
         if initializer is not None:
             initializer.invalidate_session(session_id)
@@ -570,11 +561,99 @@ async def recover_advisor_session_transport(
             session_id=session_id,
             conversation_store=store,
             runner_router=runner_router,
+            suppress_recovery_turn=True,
         )
         await asyncio.to_thread(
-            store.set_labels, session_id, {"omnigent.advisor.fallback_pending": "0"}
+            store.set_labels,
+            session_id,
+            {
+                "omnigent.advisor.fallback_pending": "0",
+                "omnigent.transport.fallback_status": "ready",
+                "omnigent.transport.fallback_error": "",
+            },
         )
         return {**result, "recovered": True, "route_id": "codex-direct"}
+
+
+async def _stop_failed_transport_runner(
+    request: Request,
+    session_id: str,
+    conv: Conversation,
+    store: ConversationStore,
+) -> None:
+    """Cold-restart only this failed chat; keep its native files and thread ID.
+
+    Closing the auxiliary terminal alone leaves its app-server and provider
+    alive. The supported host stop tears down that dedicated runner and its
+    native processes without deleting their bridge/history directories.
+    """
+    if not conv.runner_id:
+        return
+    registry = getattr(request.app.state, "host_registry", None)
+    if registry is None or not conv.host_id:
+        raise OmnigentError(
+            "The failed Codex process cannot be restarted through its execution host",
+            code=ErrorCode.RUNNER_UNAVAILABLE,
+        )
+    bound = await asyncio.to_thread(store.list_conversations_by_runner_id, conv.runner_id)
+    if any(
+        other.id != session_id and other.live_status in {"running", "waiting"} for other in bound
+    ):
+        raise OmnigentError(
+            "Wait for this chat's active child work to finish before Direct recovery",
+            code=ErrorCode.CONFLICT,
+        )
+    from omnigent.server.routes._sessions.helpers import _stop_session_host_runner
+
+    stopped = await _stop_session_host_runner(session_id, conv.host_id, conv.runner_id, registry)
+    if not stopped:
+        raise OmnigentError(
+            "The execution host did not confirm that the failed Codex process stopped",
+            code=ErrorCode.RUNNER_UNAVAILABLE,
+        )
+    await asyncio.to_thread(store.clear_runner_liveness, conv.runner_id)
+    await asyncio.to_thread(store.clear_runner_id, session_id)
+
+
+def _schedule_transport_recovery(
+    request: Request | _RunnerEventContext,
+    user_id: str | None,
+    session_id: str,
+    conversation_store: ConversationStore,
+) -> None:
+    """Acknowledge the failed forwarder before closing its native connection.
+
+    One task owns the transition. The normal next-message path uses the same
+    recovery lock, so a concurrent retry cannot close or resume it twice.
+    """
+    if session_id in _transport_recovery_tasks:
+        return
+
+    async def recover() -> None:
+        try:
+            await recover_advisor_session_transport(cast("Request", request), user_id, session_id)
+        except Exception as exc:
+            _logger.warning("Automatic Direct fallback failed for %s", session_id, exc_info=True)
+            detail = (
+                exc.detail
+                if isinstance(exc, HTTPException) and isinstance(exc.detail, str)
+                else "The Direct connection could not be established. Retry recovery in this chat."
+            )
+            await asyncio.to_thread(
+                conversation_store.set_labels,
+                session_id,
+                {
+                    "omnigent.transport.fallback_from": "omniroute",
+                    "omnigent.transport.fallback_status": "failed",
+                    "omnigent.transport.fallback_error": detail,
+                },
+            )
+        finally:
+            _transport_recovery_tasks.pop(session_id, None)
+
+    _transport_recovery_tasks[session_id] = asyncio.create_task(
+        recover(), name=f"direct-fallback:{session_id}"
+    )
 
 
 async def _recover_retry_session(
@@ -583,6 +662,7 @@ async def _recover_retry_session(
     session_id: str,
     conversation_store: ConversationStore,
     runner_router: RunnerRouter | None,
+    suppress_recovery_turn: bool = False,
 ) -> dict[str, bool | str]:
     """Recover runner/terminal readiness without creating transcript input."""
     conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
@@ -616,7 +696,7 @@ async def _recover_retry_session(
         runner_client,
         conversation_store,
         initializer=getattr(request.app.state, "runner_session_initializer", None),
-        suppress_recovery_turn=was_connected,
+        suppress_recovery_turn=was_connected or suppress_recovery_turn,
         require_success=True,
     )
 
@@ -1150,7 +1230,11 @@ def register_events_routes(
                 "This side chat ended when its runner restarted and can't be continued.",
                 code=ErrorCode.CONFLICT,
             )
-        if (conv.labels or {}).get(ADVISOR_ROUND_LABEL_KEY) and (
+        if (
+            (conv.labels or {}).get(ADVISOR_ROUND_LABEL_KEY)
+            or (conv.labels or {}).get("omnigent.access_lane") == "omniroute"
+            or (conv.labels or {}).get("omnigent.advisor.fallback_pending") == "1"
+        ) and (
             body.type == _RETRY_SESSION_TYPE
             or (body.type == "message" and body.data.get("role", "user") == "user")
         ):
@@ -2125,6 +2209,23 @@ def register_events_routes(
                 )
 
                 await sync_o3_execution_best_effort(session_id, status)
+            if (
+                status == "failed"
+                and status_error is not None
+                and (conv.labels or {}).get("omnigent.access_lane") == "omniroute"
+                and conv.parent_conversation_id is None
+            ):
+                from omnigent.server.model_advisor_service import (
+                    _RECOVERABLE_CODEX_TRANSPORT_ERRORS,
+                )
+
+                if status_error.code in _RECOVERABLE_CODEX_TRANSPORT_ERRORS:
+                    # Recovery reads durable status; don't race the usual
+                    # best-effort off-loop live-status persistence.
+                    await asyncio.to_thread(
+                        conversation_store.set_session_live_status, session_id, "failed"
+                    )
+                    _schedule_transport_recovery(request, user_id, session_id, conversation_store)
             return {"queued": False}
         if body.type == _EXTERNAL_COMPACTION_STATUS_TYPE:
             # Terminal-observed compaction edge (claude-native forwarder):

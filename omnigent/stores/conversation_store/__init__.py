@@ -247,6 +247,8 @@ _FORK_ONLY_DROPPED_LABEL_KEYS = IMPORT_PROVENANCE_LABEL_KEYS | {
     "omnigent.transport.fallback_from",
     "omnigent.transport.fallback_reason",
     "omnigent.transport.fallback_at",
+    "omnigent.transport.fallback_status",
+    "omnigent.transport.fallback_error",
 }
 
 

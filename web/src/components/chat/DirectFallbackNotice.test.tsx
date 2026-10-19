@@ -7,7 +7,10 @@ const invalidateQueries = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/useSession", () => ({ useSession: () => ({ session: snapshot }) }));
 vi.mock("@tanstack/react-query", () => ({ useQueryClient: () => ({ invalidateQueries }) }));
 vi.mock("@/store/chatStore", () => ({ useChatStore: () => snapshot.status }));
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 it("does not warn for an intentionally selected Direct connection", () => {
   snapshot.labels = { "omnigent.access_lane": "codex-direct" };
@@ -56,4 +59,44 @@ it("refreshes fallback provenance when a failed chat restarts without navigation
   snapshot.status = "running";
   view.rerender(<DirectFallbackNotice sessionId="chat" />);
   expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session", "chat"] });
+});
+
+it("refreshes an automatic fallback without requiring another message", () => {
+  vi.useFakeTimers();
+  snapshot.labels = { "omnigent.access_lane": "omniroute" };
+  snapshot.status = "running";
+  invalidateQueries.mockClear();
+  const view = render(<DirectFallbackNotice sessionId="chat" />);
+  snapshot.status = "failed";
+  view.rerender(<DirectFallbackNotice sessionId="chat" />);
+  expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session", "chat"] });
+  snapshot.labels = {
+    "omnigent.access_lane": "codex-direct",
+    "omnigent.transport.fallback_from": "omniroute",
+    "omnigent.transport.fallback_status": "ready",
+  };
+  view.rerender(<DirectFallbackNotice sessionId="chat" />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Direct fallback active — OmniRoute failed");
+  invalidateQueries.mockClear();
+  vi.advanceTimersByTime(5000);
+  expect(invalidateQueries).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["recovering", "OmniRoute failed — switching to Direct"],
+  ["failed", "Direct fallback failed — OmniRoute is unavailable"],
+])("shows a loud %s state without claiming Direct is active", (state, title) => {
+  snapshot.status = "failed";
+  snapshot.labels = {
+    "omnigent.access_lane": "omniroute",
+    "omnigent.transport.fallback_from": "omniroute",
+    "omnigent.transport.fallback_status": state,
+    "omnigent.transport.fallback_error": "Direct login needs attention",
+  };
+  render(<DirectFallbackNotice sessionId="chat" />);
+  expect(screen.getByRole("alert")).toHaveTextContent(title);
+  expect(screen.getByRole("alert")).not.toHaveTextContent("This chat used Direct fallback");
+  if (state === "failed") {
+    expect(screen.getByRole("alert")).toHaveTextContent("Direct login needs attention");
+  }
 });

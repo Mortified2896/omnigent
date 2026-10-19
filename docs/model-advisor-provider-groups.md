@@ -118,6 +118,18 @@ for the three explicit pre-upstream gateway causes; current binding is rechecked
 before fallback. Generic errors, ambiguous timeout/502, quota, output, tools,
 or an established thread remain uncertain/failed and are never replayed.
 
+Established Codex chats also have transport recovery after a terminal gateway
+failure. This covers manual OmniRoute selections, including manual choices made
+after an Advisor assignment. The server schedules recovery on the failure edge;
+a later retry/message shares the same recovery lock. The authenticated host must
+offer Direct for the same checkpoint and reasoning level. Advisor-pinned chats
+retain the frozen account/route checks. Recovery stops only that failed chat's
+dedicated runner through the host control protocol, preserves its native files,
+and cold-resumes its existing thread with an explicit Direct provider;
+it does not resend a prompt or execute any tool calls. The persistent Chat and
+Terminal notice shows switching, Direct ready, or a failed/unavailable Direct
+connection. Failed recovery is visible rather than silently staying on OmniRoute.
+
 ## Tests and release boundary
 
 Focused backend and frontend checks passed:

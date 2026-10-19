@@ -162,6 +162,26 @@ Missing or ambiguous bindings leave the run unfiled. Scheduled runs are not
 automatically pinned, so a report assigned to Reports stays visible there.
 Interactive chats retain their automatic creation-time pins.
 
+## Automatic Direct recovery
+
+A terminal transport/authentication failure in an OmniRoute-backed native Codex
+chat automatically prepares the same native thread on the qualified Codex Direct
+subscription connection. Manual model choices participate as well as Advisor
+choices. Model and reasoning level are preserved; the transport change does not
+replay the failed request or completed tool calls. Only that failed chat's
+dedicated runner is stopped through the existing host control protocol, so the
+old gateway app-server actually exits. Its native history directories are kept,
+then the same native thread cold-resumes with Direct pinned. Active child work
+blocks the reset and produces a visible recovery failure. Retry/message handling joins
+the same recovery lock. A prominent persistent banner appears in both Chat and
+Terminal views, including explicit failure details if Direct is unavailable.
+Historical gateway errors remain inspectable after a later successful reply.
+
+This recovery is server-owned and works with existing execution hosts supporting
+explicit provider pinning on cold native resume. A busy unrelated chat/host does
+not need to be restarted. A newly deployed web UI needs a reload in an already
+open desktop/browser view.
+
 ## Local tracing and outcomes
 
 Follow [direct OpenTelemetry tracing](../deploy/docs/opentelemetry-tracing.md).
