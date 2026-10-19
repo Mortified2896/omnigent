@@ -6,6 +6,15 @@ is not required. Codex is Omnigent's standard implicit harness for new chats
 and CLI runs when configured; explicit user and project harness choices remain
 honored. This file defines the fork's default repository workflow.
 
+## Current deployment target — Mac (updated 2026-10-19)
+
+**RTX is down. The managed Mac instance is the active Omnigent runtime and
+the default deployment target until the owner explicitly confirms RTX recovery
+and selects it again.** Follow [Mac local operation](docs/mac-local-operation.md).
+Do not retry RTX SSH, require Komodo/Preview `:2222`, or stop an authorized Mac
+rollout because RTX is unavailable. The RTX workflow below applies only to an
+explicitly selected RTX deployment after recovery.
+
 ## Ordinary source work
 
 - Read applicable agent instructions, the relevant source, and nearby tests.
@@ -24,14 +33,17 @@ honored. This file defines the fork's default repository workflow.
   diffs are not automatically low risk. Do not bypass existing hooks/checks.
 - For requested application changes meant to be inspected in the running
   Omnigent UI, completion includes validation, merge to the fork's main, and
-  rollout per the HomeLab release architecture (see
-  `docs/omnigent-release-architecture.md` in HomeLab): build an immutable
-  accepted SHA, expose it as a disposable Komodo candidate for owner
+  rollout to the active deployment target, followed by live verification and
+  inspectable URLs. For the current Mac target, follow
+  `docs/mac-local-operation.md`: build an immutable release from the accepted
+  SHA, preserve the managed data/config, and update the web server without
+  restarting busy execution hosts. For an explicitly selected RTX deployment,
+  follow HomeLab `docs/omnigent-release-architecture.md`: expose the immutable
+  accepted SHA as a disposable Komodo candidate for owner
   inspection at Preview `:2222`, then promote the exact approved SHA to
   production O1 and verify `:1111`, followed by live verification and
-  inspectable URLs. Legacy O2 is transitional only and is not a normal
-  rollout target. Treat the implementation request as authorization for
-  this development rollout unless the user asks for source-only work or says
+  inspectable URLs. Legacy O2 is retired. Treat the implementation request as
+  authorization for this development rollout unless the user asks for source-only work or says
   not to merge/deploy. Do not stop at local edits or a draft PR. A request for
   deployment in a later turn supersedes an earlier no-deploy boundary.
 - Follow the requested delivery and applicable session instructions. This repo
@@ -70,9 +82,10 @@ For task scoring and live acceptance chats, follow `docs/task-scoring-and-test-s
 
 Apply this section only to live deployment tasks, not source-only work.
 
-The target topology is production O1 (`:1111`) plus disposable candidates
-inspected at Preview `:2222`; legacy O2 is transitional during migration only
-and disappears from the active architecture once retired. The default
+The active target is the Mac as stated above. The following topology and
+promotion rules apply to RTX deployments only, after recovery and explicit
+selection: production O1 (`:1111`) plus disposable candidates inspected at
+Preview `:2222`; legacy O2 is retired. The RTX default
 promotion target is O1 only, and no new application/UI release reaches O1
 before the exact artifact has been tested as a candidate and manually
 inspected through Preview, unless the owner explicitly overrides this

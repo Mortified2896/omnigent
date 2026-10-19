@@ -4,6 +4,31 @@ A Mac can run the Omnigent server, web UI, and local host independently of RTX.
 Use the current customized fork, build its web UI, and keep runtime data outside
 Git. A fresh instance does not need remote chat history or a remote database.
 
+## Current active deployment (2026-10-19)
+
+**RTX is down. Deploy Omnigent changes to the managed Mac instance by default
+until the owner explicitly confirms RTX recovery and selects it again.**
+RTX SSH, Komodo candidates, and RTX Preview `:2222` are not prerequisites for
+this Mac deployment. The owner explicitly selected Mac deployment on this date.
+
+The verified managed instance uses:
+
+- URL: `http://localhost:6767` (loopback `127.0.0.1:6767`).
+- Server LaunchAgent: `com.mortified2896.omnigent-mac.server`.
+- Configuration: `/Users/Jo/.local/share/omnigent-mac/config`.
+- Database: `/Users/Jo/.local/share/omnigent-mac/data/chat.db`.
+- Immutable releases: `/Users/Jo/.local/share/omnigent-mac/releases/<full-sha>/`.
+
+Inspect the live LaunchAgent, listener, `/health`, and `/v1/info` before each
+deployment; these paths identify the managed workspace, not a new empty
+instance. Build from the verified fork SHA into a new release directory and
+verify its embedded SHA and assets before switching. Preserve a consistent
+SQLite backup, the previous server plist, and the previous release for rollback.
+Serialize server updates with the existing Mac deployment lock. For a frontend
+change, switch only the server's release and verify health, build SHA, existing
+projects/chats, and the rendered behavior. Preserve execution-host processes
+and active runners. Keep isolated acceptance state separate from managed data.
+
 ## Build from the fork
 
 Verify repository identity, branch/base, dirty files, and the fork push target.
