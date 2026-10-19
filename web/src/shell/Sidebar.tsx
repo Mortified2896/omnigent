@@ -293,6 +293,9 @@ const ServerInfoContext = createContext<ReturnType<typeof useServerInfo>>("loadi
 const RowActivationContext = createContext<
   (id: string, event: MouseEvent<HTMLAnchorElement>) => void
 >(() => {});
+const ActiveRowScrollContext = createContext<
+  (row: HTMLLIElement, id: string, isPinned: boolean) => void
+>(() => {});
 // Rows report an in-progress inline-rename edit here so ConversationList can
 // hold the sort order for the edit's whole duration — the pointer often
 // leaves the list while typing, and a reorder then would shuffle rows around
@@ -316,6 +319,7 @@ function SidebarRowDataProvider({
   viewerId,
   serverInfo,
   onActivate,
+  activeId,
   children,
 }: {
   projectNamesById: Map<string, string>;
@@ -325,8 +329,21 @@ function SidebarRowDataProvider({
   viewerId: string | null;
   serverInfo: ReturnType<typeof useServerInfo>;
   onActivate: (id: string, event: MouseEvent<HTMLAnchorElement>) => void;
+  activeId: string | null;
   children: ReactNode;
 }) {
+  // Pinning moves the active row between sections and remounts it. Remember
+  // that pin across row lifetimes so unpinning doesn't follow it down the list.
+  const pinnedActiveId = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (pinnedActiveId.current !== activeId) pinnedActiveId.current = null;
+  }, [activeId]);
+  const scrollActiveRow = useCallback((row: HTMLLIElement, id: string, isPinned: boolean) => {
+    if (isPinned) pinnedActiveId.current = id;
+    else if (pinnedActiveId.current === id) return;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
   return (
     <ProjectNamesContext.Provider value={projectNamesById}>
       <ProjectIconsContext.Provider value={projectIconsById}>
@@ -335,7 +352,9 @@ function SidebarRowDataProvider({
             <ViewerIdContext.Provider value={viewerId}>
               <ServerInfoContext.Provider value={serverInfo}>
                 <RowActivationContext.Provider value={onActivate}>
-                  {children}
+                  <ActiveRowScrollContext.Provider value={scrollActiveRow}>
+                    {children}
+                  </ActiveRowScrollContext.Provider>
                 </RowActivationContext.Provider>
               </ServerInfoContext.Provider>
             </ViewerIdContext.Provider>
@@ -2238,6 +2257,7 @@ function ConversationList({
       viewerId={viewerId}
       serverInfo={serverInfo}
       onActivate={activateRow}
+      activeId={displayedActiveId}
     >
       <DndContext
         sensors={sensors}
@@ -3789,12 +3809,14 @@ function ConversationRowImpl({
   const isMobile = useContext(IsMobileContext);
   // When this row becomes the active conversation (e.g. a freshly created
   // session navigated to via `/c/:id`), scroll it toward the center of the
-  // sidebar so it's comfortably in view rather than pinned to an edge.
+  // sidebar so it's comfortably in view rather than pinned to an edge. The
+  // list-level callback preserves pin history when this row remounts.
   const rowRef = useRef<HTMLLIElement>(null);
+  const scrollActiveRow = useContext(ActiveRowScrollContext);
   useEffect(() => {
-    if (!isActive) return;
-    rowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [isActive]);
+    if (!isActive || !rowRef.current) return;
+    scrollActiveRow(rowRef.current, conversation.id, isPinned);
+  }, [isActive, conversation.id, isPinned, scrollActiveRow]);
   const queryClient = useQueryClient();
   const rename = useRenameConversation();
   const del = useStopAndDeleteConversation();

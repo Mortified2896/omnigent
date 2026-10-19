@@ -277,10 +277,68 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   useChatStore.setState({ switchTo: originalSwitchTo });
 });
 
 describe("quick pin/unpin hover button", () => {
+  it("keeps scrolling to the active chat when pinning, but stays put when unpinning", () => {
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { rerenderSidebar } = renderSidebar(CONV.id);
+    expect(scroll).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    scroll.mockClear();
+
+    fireEvent.click(screen.getByTestId("quick-pin-conversation"));
+    expect(screen.getByText("Pinned").closest("section")).toContainElement(
+      screen.getByRole("link", { name: "My Session" }),
+    );
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenLastCalledWith({ behavior: "smooth", block: "center" });
+    scroll.mockClear();
+
+    fireEvent.click(screen.getByTestId("quick-pin-conversation"));
+    expect(screen.queryByText("Pinned")).toBeNull();
+    expect(screen.getByRole("link", { name: "My Session" })).toBeInTheDocument();
+    rerenderSidebar();
+    expect(scroll).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("quick-pin-conversation"));
+    expect(scroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not scroll down when unpinning a chat that was already pinned on load", () => {
+    mocks.pinnedStore.set([CONV.id]);
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderSidebar(CONV.id);
+    scroll.mockClear();
+
+    fireEvent.click(screen.getByTestId("quick-pin-conversation"));
+
+    expect(screen.queryByText("Pinned")).toBeNull();
+    expect(screen.getByRole("link", { name: "My Session" })).toBeInTheDocument();
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it("still scrolls to an unpinned chat when navigating back to it", () => {
+    mockConversations([CONV, { ...CONV, id: "other", title: "Other chat" }]);
+    mocks.pinnedStore.set([CONV.id]);
+    const scroll = vi.spyOn(Element.prototype, "scrollIntoView");
+    renderSidebar(CONV.id);
+    scroll.mockClear();
+
+    const row = screen.getByRole("link", { name: "My Session" }).closest("li")!;
+    fireEvent.click(within(row).getByTestId("quick-pin-conversation"));
+    expect(scroll).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("link", { name: "Other chat" }));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    scroll.mockClear();
+
+    fireEvent.click(screen.getByRole("link", { name: "My Session" }));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll).toHaveBeenLastCalledWith({ behavior: "smooth", block: "center" });
+  });
+
   it("keeps the row full-width and the trailing controls inset from the right edge", () => {
     // The row link is `w-full` (not `w-[calc(100%+1rem)]`) so its highlight
     // stays inset from the right edge, aligning with the project/folder rows.
