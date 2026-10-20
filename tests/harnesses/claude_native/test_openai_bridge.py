@@ -295,7 +295,7 @@ async def test_native_start_attaches_images_without_base64_in_transcript(setup):
     class Rpc:
         async def request(self, method, params):
             seen[method] = params
-            return {"thread": {"id": "fixture"}}
+            return {"thread": {"id": "fixture"}, "turn": {"id": "native-turn-fixture"}}
 
         async def close(self):
             pass
@@ -310,8 +310,10 @@ async def test_native_start_attaches_images_without_base64_in_transcript(setup):
     payload["messages"][-1]["content"] = [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}}
     ]
-    await bridge.start(anthropic_request(payload, profile))
+    turn = await bridge.start(anthropic_request(payload, profile))
     inputs = seen["turn/start"]["input"]
     assert inputs[1] == {"type": "image", "url": "data:image/png;base64,ZmFrZQ=="}
     assert "Open WebUI" in inputs[0]["text"]
     assert "ZmFrZQ==" not in inputs[0]["text"]
+    await bridge.discard(turn)
+    assert seen["turn/interrupt"]["turnId"] == "native-turn-fixture"

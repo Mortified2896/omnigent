@@ -127,6 +127,7 @@ class Turn:
     recorded: dict = field(default_factory=dict)
     pending: dict = field(default_factory=dict)
     touched: float = field(default_factory=time.monotonic)
+    turn_id: str = ""
 
 
 def digest(value: object) -> str:
@@ -243,7 +244,7 @@ class Bridge:
         with contextlib.suppress(Exception):
             await turn.rpc.request(
                 "turn/interrupt",
-                {"threadId": turn.thread, "turnId": turn.pending.get("turnId", "")},
+                {"threadId": turn.thread, "turnId": turn.pending.get("turnId") or turn.turn_id},
             )
         await turn.rpc.close()
 
@@ -370,7 +371,7 @@ class Bridge:
             )
             turn = Turn(rpc, body["model"], history_digest(messages), tools, effort, thread)
             turn.tool_names = tool_names
-            await rpc.request(
+            started = await rpc.request(
                 "turn/start",
                 {
                     "threadId": thread,
@@ -379,6 +380,7 @@ class Bridge:
                     "input": [{"type": "text", "text": prompt, "text_elements": []}, *images],
                 },
             )
+            turn.turn_id = (started.get("turn") or {}).get("id", "")
             return turn
         except Exception:
             await rpc.close()
