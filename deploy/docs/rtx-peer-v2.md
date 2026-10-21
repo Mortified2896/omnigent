@@ -123,10 +123,16 @@ other direction and becomes unavailable once the v2 O1 database exists or either
 The legacy O1 is never relabeled as a v2 peer. `--adopt-legacy-primary` is the
 separate, explicit O2-supervised transition of O1 after deep O2 acceptance.
 
-Gateway Codex deployments must supply a provider-qualified `model_catalog_json`.
-Minimal probe homes preserve that catalog and the configured default; changing
-the file invalidates the discovery cache. Disabling O3 does not enable bare
-subscription model IDs on a gateway that requires qualified routes.
+Gateway Codex launches must use provider-qualified wire model IDs. Current
+hosts discover native model metadata through Codex `model/list` and intersect
+OmniRoute choices with its provider-scoped model endpoint. Prefer that live
+discovery over a dated `model_catalog_json` pin: a pinned file is authoritative
+to Codex and can hide a supported model even after refreshing the discovery
+cache. If a deployment intentionally supplies a custom catalog, maintain and
+validate it with the gateway's current routes. Minimal probe homes preserve
+such an explicit catalog and the configured default; changing the file
+invalidates the discovery cache. Disabling O3 does not enable bare subscription
+model IDs on a gateway that requires qualified routes.
 
 ## Verified initial rollout (2026-09-16; historical evidence)
 
