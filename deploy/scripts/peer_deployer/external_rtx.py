@@ -128,9 +128,23 @@ def _health(peer: Peer) -> dict:
 
 
 def _state_bytes(path: Path) -> int:
+    root = path.resolve()
     total = 0
     for item in path.rglob("*"):
-        require(not item.is_symlink(), f"state contains an indirect path: {item}")
+        if item.is_symlink():
+            # Omnigent keeps relative latest-*.log aliases in its state tree.
+            # tar preserves these links without dereferencing them, and its
+            # data extraction filter can restore them inside the staged state.
+            # Absolute, escaping, dangling and directory links remain refused.
+            target = item.resolve()
+            require(
+                not item.readlink().is_absolute()
+                and target.is_relative_to(root)
+                and target.is_file(),
+                f"state contains an unsafe link: {item}",
+            )
+            total += item.lstat().st_size
+            continue
         if item.is_file():
             total += item.stat().st_size
     return total

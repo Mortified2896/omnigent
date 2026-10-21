@@ -155,6 +155,55 @@ def test_failed_external_start_restores_target_and_retains_evidence(fixture, mon
     assert Path(record["backup"]["path"]).is_file()
 
 
+def test_relative_log_alias_survives_failed_promotion_restore(fixture, monkeypatch):
+    target, _, _, _ = fixture
+    logs = target.root / "state/logs/cli"
+    logs.mkdir(parents=True)
+    log = logs / "cli-20261021.log"
+    log.write_text("original log\n")
+    alias = logs / "latest-cli.log"
+    alias.symlink_to(log.name)
+    assert external_rtx._state_bytes(target.root / "state") >= target.db.stat().st_size
+    original_start = rtx.start
+
+    def broken_start(peer, sha):
+        if sha == NEW:
+            log.write_text("failed release log\n")
+            alias.unlink()
+            raise Refused("broken candidate")
+        return original_start(peer, sha)
+
+    monkeypatch.setattr(rtx, "start", broken_start)
+    with pytest.raises(Refused, match="broken candidate"):
+        promote(fixture)
+
+    assert target.current.resolve().name == OLD
+    assert alias.is_symlink()
+    assert alias.readlink() == Path(log.name)
+    assert alias.read_text() == "original log\n"
+
+
+@pytest.mark.parametrize("kind", ["escape", "absolute", "directory", "dangling"])
+def test_state_headroom_refuses_links_that_cannot_be_safely_restored(tmp_path, kind):
+    state = tmp_path / "state"
+    state.mkdir()
+    local = state / "log.txt"
+    local.write_text("retained")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside state")
+    (state / "directory").mkdir()
+    targets = {
+        "escape": Path("../outside.txt"),
+        "absolute": local,
+        "directory": Path("directory"),
+        "dangling": Path("missing.txt"),
+    }
+    (state / "alias").symlink_to(targets[kind])
+
+    with pytest.raises(Refused, match="unsafe link"):
+        external_rtx._state_bytes(state)
+
+
 def test_candidate_preflight_failure_does_not_stop_target(fixture, monkeypatch):
     target, events, _, transactions = fixture
     before = digest(target.db), target.current.resolve()
