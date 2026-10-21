@@ -6,14 +6,14 @@ is not required. Codex is Omnigent's standard implicit harness for new chats
 and CLI runs when configured; explicit user and project harness choices remain
 honored. This file defines the fork's default repository workflow.
 
-## Current deployment target — Mac (updated 2026-10-19)
+## Current deployment target — RTX (updated 2026-10-21)
 
-**RTX is down. The managed Mac instance is the active Omnigent runtime and
-the default deployment target until the owner explicitly confirms RTX recovery
-and selects it again.** Follow [Mac local operation](docs/mac-local-operation.md).
-Do not retry RTX SSH, require Komodo/Preview `:2222`, or stop an authorized Mac
-rollout because RTX is unavailable. The RTX workflow below applies only to an
-explicitly selected RTX deployment after recovery.
+**The owner confirmed RTX recovery and selected it again for daily coding.**
+RTX O1 is the default deployment target; follow the candidate/Preview workflow
+below. The managed Mac remains available for recovery and Mac-specific work;
+follow [Mac local operation](docs/mac-local-operation.md) when targeting it.
+Target selection does not mean the 0.17 upgrade or chat-history merge has
+completed. Verify the live build and migration evidence before claiming either.
 
 ## Ordinary source work
 
@@ -34,7 +34,7 @@ explicitly selected RTX deployment after recovery.
 - For requested application changes meant to be inspected in the running
   Omnigent UI, completion includes validation, merge to the fork's main, and
   rollout to the active deployment target, followed by live verification and
-  inspectable URLs. For the current Mac target, follow
+  inspectable URLs. For a Mac deployment, follow
   `docs/mac-local-operation.md`: build an immutable release from the accepted
   SHA, preserve the managed data/config, and update the web server without
   restarting busy execution hosts. For an explicitly selected RTX deployment,
@@ -82,9 +82,8 @@ For task scoring and live acceptance chats, follow `docs/task-scoring-and-test-s
 
 Apply this section only to live deployment tasks, not source-only work.
 
-The active target is the Mac as stated above. The following topology and
-promotion rules apply to RTX deployments only, after recovery and explicit
-selection: production O1 (`:1111`) plus disposable candidates inspected at
+The selected target is RTX as stated above. Its topology and
+promotion rules are: production O1 (`:1111`) plus disposable candidates inspected at
 Preview `:2222`; legacy O2 is retired. The RTX default
 promotion target is O1 only, and no new application/UI release reaches O1
 before the exact artifact has been tested as a candidate and manually

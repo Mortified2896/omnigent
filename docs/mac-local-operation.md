@@ -4,12 +4,16 @@ A Mac can run the Omnigent server, web UI, and local host independently of RTX.
 Use the current customized fork, build its web UI, and keep runtime data outside
 Git. A fresh instance does not need remote chat history or a remote database.
 
-## Current active deployment (2026-10-19)
+## Current role — recovery and Mac-specific work (2026-10-21)
 
-**RTX is down. Deploy Omnigent changes to the managed Mac instance by default
-until the owner explicitly confirms RTX recovery and selects it again.**
-RTX SSH, Komodo candidates, and RTX Preview `:2222` are not prerequisites for
-this Mac deployment. The owner explicitly selected Mac deployment on this date.
+**The owner confirmed RTX recovery and selected RTX again for daily coding.**
+RTX O1 is the default deployment target, with candidate inspection at Preview
+`:2222` before promotion. Keep the managed Mac and its history for recovery and
+Mac-specific work. The return to RTX does not itself prove the upgrade or
+history merge is complete. Verify each separately.
+
+RTX SSH, Komodo candidates, and RTX Preview are not prerequisites for an
+explicitly requested Mac deployment. This guide continues to define that path.
 
 The verified managed instance uses:
 
