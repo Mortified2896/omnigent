@@ -1,5 +1,8 @@
 # Contributing to Omnigent
 
+For release integrations, use the [fork upgrade guide](docs/fork-upgrades.md),
+which maps custom behavior to modules, integration points and regression checks.
+
 Start with [AGENTS.md](AGENTS.md), the repository workflow for
 `Mortified2896/omnigent`. Ordinary fork development is not an upstream
 contribution. Follow the task's delivery instructions; this guide adds no
@@ -70,7 +73,7 @@ upstream reference; they do not add requirements to ordinary fork work.
 
 [Upstream submission reference](CONTRIBUTING.upstream.md#pull-requests); use the fork template for fork PRs.
 
-### Every PR needs an issue
+<a name="every-pr-needs-an-issue"></a>
 
 [Upstream-only issue policy](CONTRIBUTING.upstream.md#every-pr-needs-an-issue).
 

@@ -63,12 +63,18 @@ from omnigent.util.test_session_policy import (
     test_session_labels,
 )
 from tests._helpers.compat import (
+    apply_runner_env,
     apply_server_env,
+    compat_runner_cwd,
     compat_server_cwd,
+    runner_executable,
     server_executable,
 )
 from tests._helpers.native_session import create_native_session
 from tests._helpers.session import bind_session_runner, bundle_files, post_session_bundle
+from tests._helpers.workspace_geometry import (
+    workspace_bar_needs_collapse as workspace_bar_needs_collapse,
+)
 from tests.codex_parity.helpers import ev_assistant_message, ev_completed, ev_response_created
 from tests.codex_parity.sidecar_harness import (
     CodexResponsesSidecar,
@@ -131,30 +137,6 @@ def fetch_with_retry(route: Route, *, attempts: int = 3) -> APIResponse:
             if not any(marker in str(exc) for marker in _TRANSIENT_FETCH_ERRORS):
                 raise
     return route.fetch()
-
-
-def workspace_bar_needs_collapse(bar: Locator) -> bool:
-    """Whether the composer workspace bar's full labels would overflow or truncate.
-
-    Mirrors the bar's own rule (any ``[data-workspace-collapse-label]`` wider
-    than its box, or the row wider than the bar) by probing the expanded layout
-    in place and restoring the current verdict within the same evaluation, so a
-    test can assert the icon collapse is justified — and absent when everything fits.
-
-    :param bar: Locator for ``composer-workspace-controls``.
-    :returns: ``True`` when the bar must show icons only.
-    """
-    return bar.evaluate(
-        """bar => {
-          const verdict = bar.dataset.labels;
-          delete bar.dataset.labels;
-          const labels = [...bar.querySelectorAll('[data-workspace-collapse-label]')];
-          const cramped = bar.scrollWidth > bar.clientWidth + 1
-            || labels.some(el => el.scrollWidth > el.clientWidth + 1);
-          if (verdict !== undefined) bar.dataset.labels = verdict;
-          return cramped;
-        }"""
-    )
 
 
 def open_right_rail(page: Page) -> None:
@@ -481,16 +463,6 @@ def _finalize_test_session(
             "preserve",
             f"Conditional delete returned HTTP {delete_response.status_code}",
         )
-
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_makereport(
-    item: pytest.Item, call: pytest.CallInfo[Any]
-) -> Generator[None, None, None]:
-    """Expose the final call result to manifest-backed fixture teardown."""
-    outcome = yield
-    report = outcome.get_result()
-    setattr(item, f"rep_{report.when}", report)
 
 
 # ``omnigent server --agent`` runs the spec through the strict
@@ -1170,8 +1142,9 @@ def _spawn_runner_against_external_server(
     }
     log_handle = open(log_path, "w")  # noqa: SIM115 — closed in finally
     proc = subprocess.Popen(
-        [sys.executable, "-m", "omnigent.runner._entry"],
-        env=env,
+        [runner_executable(), "-m", "omnigent.runner._entry"],
+        env=apply_runner_env(env),
+        cwd=compat_runner_cwd(),
         stdout=log_handle,
         stderr=subprocess.STDOUT,
     )
@@ -1410,8 +1383,9 @@ def live_server(
         "OPENAI_API_KEY": "mock-key",
     }
     runner_proc = subprocess.Popen(
-        [sys.executable, "-m", "omnigent.runner._entry"],
-        env=runner_env,
+        [runner_executable(), "-m", "omnigent.runner._entry"],
+        env=apply_runner_env(runner_env),
+        cwd=compat_runner_cwd(),
         stdout=runner_log_handle,
         stderr=subprocess.STDOUT,
     )
@@ -1768,8 +1742,9 @@ def _ensure_runner_online(
         ),
     }
     proc = subprocess.Popen(
-        [sys.executable, "-m", "omnigent.runner._entry"],
-        env=env,
+        [runner_executable(), "-m", "omnigent.runner._entry"],
+        env=apply_runner_env(env),
+        cwd=compat_runner_cwd(),
         stdout=log_handle,
         stderr=subprocess.STDOUT,
     )
@@ -2695,7 +2670,9 @@ def pytest_runtest_makereport(
     """Stop the recording when the test body ends, before later fixtures tear down.
 
     The ``context`` behind ``page`` otherwise outlives the session fixtures' teardown."""
-    yield
+    outcome = yield
+    report = outcome.get_result()
+    setattr(item, f"rep_{report.when}", report)
     if call.when == "call" and _recording_requested(item):
         _stop_recorded_context(item)
 
@@ -3449,8 +3426,9 @@ def mocked_native_codex_session(
     try:
         proc = _spawn_server()
         runner_proc = subprocess.Popen(
-            [sys.executable, "-m", "omnigent.runner._entry"],
-            env=runner_env,
+            [runner_executable(), "-m", "omnigent.runner._entry"],
+            env=apply_runner_env(runner_env),
+            cwd=compat_runner_cwd(),
             stdout=runner_log_handle,
             stderr=subprocess.STDOUT,
         )

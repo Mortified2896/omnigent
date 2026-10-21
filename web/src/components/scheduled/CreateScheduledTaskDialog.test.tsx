@@ -154,7 +154,10 @@ const AGENTS: AvailableAgent[] = [
     display_name: "Claude Code",
     harness: "claude-native",
   }),
-  testAgent("ag_codex_native", "codex-native-ui", {display_name: "Codex", harness: "codex-native"}),
+  testAgent("ag_codex_native", "codex-native-ui", {
+    display_name: "Codex",
+    harness: "codex-native",
+  }),
 ];
 
 const mutateAsync = vi.fn();
@@ -578,7 +581,7 @@ describe("CreateScheduledTaskDialog submit", () => {
       prompt: "Do it",
       // Default agent = first after sortAgentsForDisplay (harness rows rank
       // first, so the Claude Code harness is the default) — matches NewChatDialog.
-      agentId: "ag_claude_native",
+      agentId: "ag_codex_native",
       // Default schedule model is daily at 09:00.
       rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
     });
@@ -872,6 +875,7 @@ describe("CreateScheduledTaskDialog model + effort controls", () => {
 
   it("sends the selected model + effort on create for a capable agent", async () => {
     renderDialog();
+    fireEvent.click(screen.getByTestId("pick-harness-claude"));
     fireEvent.change(screen.getByTestId("task-name-input"), { target: { value: "N" } });
     fireEvent.change(screen.getByTestId("task-prompt-input"), { target: { value: "P" } });
 

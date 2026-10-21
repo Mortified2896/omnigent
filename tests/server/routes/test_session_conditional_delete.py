@@ -76,6 +76,7 @@ def test_conditional_delete_rejects_label_changes_and_then_deletes_current_snaps
         assert deleted.status_code == 200, deleted.text
 
     assert store.get_conversation(conv.id) is None
+    assert SqlAlchemyAgentStore(db_uri).get(AGENT_ID) is not None
 
 
 def test_conditional_delete_rejects_a_session_with_a_child(db_uri: str) -> None:

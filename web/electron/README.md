@@ -140,15 +140,24 @@ tries silent renewal. Missing credentials, failed renewal, unavailable OAuth,
 and cancellation lead to the shell's connect/retry screen—not embedded workspace
 SSO. Failed connections stay blocked through the selector handoff so a late login
 redirect cannot replace it. Connect reuses stored credentials and opens the
-system browser only when they can't sign in; **Sign in with a different account**
-under Connect always opens it. Saved-server launches, additional windows, server
-switches, and deep links use stored credentials without opening a browser
-automatically.
+system browser only when they can't sign in. Credentials are stored per
+workspace, so an account URL that names its workspace (`?o=<workspace id>`)
+reuses the credentials of the workspace it reached last time; without `?o=` it
+runs the account sign-in and workspace picker. To use another account, choose
+**Server → Sign Out of Server** (or **Sign out of <workspace>** in the server
+picker at the bottom of the sidebar, on servers whose web app includes it): it
+forgets the stored OAuth token, clears DBAUTH, and returns every window on that
+workspace to the connect screen, so the next Connect signs in through the
+browser. Saved-server launches, additional windows, server switches, and deep
+links use stored credentials without opening a browser automatically.
 
 When the workspace is briefly unreachable (a VPN reconnecting after wake, an IP
 access list refusing this network, or HTTP 5xx/429), the window keeps its page
 under a **Reconnecting to Databricks…** overlay and retries every 5s for a minute,
-then every 10s for another. Cancel, or running out of retries, returns to the
+then every 10s for another. After that, an unreachable or IP-blocked workspace
+keeps retrying every minute until it answers; HTTP 5xx/429 stops there. Attempts
+wait while the Mac is offline without counting, and waking or unlocking the Mac
+starts the 5s retries over. Cancel, or running out of retries, returns to the
 setup page with the reason.
 
 For the packaged macOS app, explicitly roll back to embedded Databricks sign-in:
@@ -280,9 +289,10 @@ browser sign-in:
 - **While connected,** the shell renews the cookie before it expires and when it
   is removed. The web app's own redirect to `/auth/login` is stopped before it
   can reach the IdP; the shell renews and reloads the page you were on.
-- **Sign out** (the web app's `/auth/logout`) is handled by the shell: it
-  revokes the refresh grant, clears the session cookie, and shows the connect
-  screen for every window on that server. Your browser stays signed in to the
+- **Sign out** (the web app's `/auth/logout`, **Server → Sign Out of Server**,
+  or **Sign out of <server>** in the sidebar server picker) is handled by the shell: it revokes the refresh
+  grant, clears the session cookie, and shows the connect screen for every
+  window on that server. Your browser stays signed in to the
   IdP, so the next Connect may finish without a prompt.
 - **Cancel** (the × beside **Authenticating…**) stops the attempt and the
   loopback listener. A browser tab that finishes later reaches nothing.
@@ -309,8 +319,8 @@ sign-in has a passkey step), then `just electron-dev`:
    (the cookie is renewed silently).
 5. **Invalidate Cached Refresh Token**, then **Simulate Session Expiry**, then
    reload: the connect screen says "Sign in to <host> to continue."
-6. Sign out from the app's settings: the connect screen says "You're signed out
-   of <host>." Relaunching doesn't sign you back in.
+6. Sign out from the app's settings: the connect screen opens without a message.
+   Relaunching doesn't sign you back in.
 7. An accounts-mode server and `http://localhost:6767` (header mode) still sign
    in exactly as before.
 
@@ -592,7 +602,7 @@ bounds sync. Without this signal the pane would gate itself off forever and the
 embedded browser would stay invisible. (`browserViewRegistry.test.js` locks the
 create-signal → setActive → attached transition.)
 
-**Toolbar.** When a view is attached, `BrowserPane` renders a user-facing
+**Toolbar.** Even before a page is opened, `BrowserPane` renders a user-facing
 toolbar above the page: back / forward / reload, a DevTools toggle, and an
 editable URL bar (Enter navigates; the typed value is normalized to add a
 scheme — a dotless host like `localhost` gets `http://`, everything else
@@ -698,7 +708,16 @@ Local packages use the `ai.omnigent.desktop-dev` app ID and the **Omnigent Dev**
 name; output lands in `electron/dist-dev/` (the DMG is named
 `Omnigent Dev-<version>-<arch>.dmg`). They keep their own app data and do not
 install production desktop updates. `build:mac:release` retains
-`ai.omnigent.desktop`, **Omnigent**, and `electron/dist/`.
+`ai.omnigent.desktop`, **Omnigent**, and `electron/dist/`. For the full
+cross-platform publishing and update-feed checklist, see [the desktop release
+runbook](RELEASING.md).
+
+macOS apps, including unpackaged development, default to V2 onboarding only when the MDM preference
+`databricksInternalFeaturesEnabled` is `true`, for both new and existing profiles.
+Public macOS users and Windows/Linux keep the legacy
+default. The setup-page switch still persists an explicit choice on every
+platform, and `OMNIGENT_SERVER_SELECTOR_V2=1` forces V2 regardless of the saved
+choice. A saved server still reconnects on launch.
 
 Unpackaged `pnpm start` / `just electron-dev` runs inside Electron's own macOS
 bundle, but reads local preferences from `ai.omnigent.desktop-dev` explicitly

@@ -15,6 +15,15 @@ follow [Mac local operation](docs/mac-local-operation.md) when targeting it.
 Target selection does not mean the 0.17 upgrade or chat-history merge has
 completed. Verify the live build and migration evidence before claiming either.
 
+WireGuard is the primary Mac/iPhone connection; Tailscale is recovery only.
+Read HomeLab `docs/wireguard-homelab.md` before choosing a network path. With
+WireGuard connected, RTX SSH uses German LAN address `192.168.5.24` (for the
+existing pinned alias: `ssh -o HostName=192.168.5.24 rtx-omnigent`). Tailscale
+being stopped on the Mac is expected; do not ask to reconnect it or change VPNs
+as a deployment prerequisite. Production keeps the same private HTTPS URL.
+Preview `:2222` currently has only a Tailscale listener; distinguish that ingress
+limit from server health and preserve the candidate-inspection requirement.
+
 ## Ordinary source work
 
 - Read applicable agent instructions, the relevant source, and nearby tests.

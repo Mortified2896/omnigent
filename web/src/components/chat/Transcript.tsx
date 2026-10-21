@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { hasCommandModifier } from "@/lib/hotkeys";
 import { isSystemUserContent } from "@/lib/systemMessage";
+import { isTerminalCommandInput } from "@/lib/blocks";
 import {
   type Bubble,
   type BubbleCache,
@@ -37,6 +38,8 @@ import { useChatStore } from "@/store/chatStore";
 import { TranscriptScrollbar } from "@/pages/TranscriptScrollbar";
 import { TurnRail, type Turn } from "@/pages/TurnRail";
 import { StreamBudgetBanner } from "@/components/StreamBudgetBanner";
+import { ArcaShutdownBanner } from "@/components/ArcaShutdownBanner";
+import { useArcaShutdownBanner } from "@/hooks/useArcaShutdownBanner";
 import { useSearchParams } from "@/lib/routing";
 import { MESSAGE_QUERY_PARAM } from "@/lib/messageDeepLink";
 import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
@@ -54,7 +57,6 @@ import {
   KeepBottomOnViewportResize,
   LatestTurnSpacer,
   ScrollToBottomOnSend,
-  UserMessageNavConnected,
   WorkingIndicator,
   bubbleKey,
   buildPendingBubbles,
@@ -71,6 +73,7 @@ import {
 import { SCROLL_RESTORE_BUDGET_MS } from "@/shell/useScrollRestore";
 
 export interface TranscriptProps {
+  hostId: string | null | undefined;
   /** Ref callback for the conversation wrapper element (SelectionPopup scope +
    *  JumpToTopButton hover ancestor). Owned by the parent, forwarded here. */
   setConversationEl: (el: HTMLDivElement | null) => void;
@@ -121,6 +124,7 @@ function FeedbackSendScroll({ nonce }: { nonce: number }) {
  * dialogs bail out via React's normal prop-equality check.
  */
 function TranscriptImpl({
+  hostId,
   setConversationEl,
   containerEl,
   scroller,
@@ -185,8 +189,8 @@ function TranscriptImpl({
     const ids = new Set<string>();
     for (const block of blocks) {
       if (
-        block.type === "user_message" &&
-        !isSystemUserContent(block.content) &&
+        ((block.type === "user_message" && !isSystemUserContent(block.content)) ||
+          isTerminalCommandInput(block)) &&
         block.ctx.itemId !== null
       ) {
         ids.add(block.ctx.itemId);
@@ -326,24 +330,34 @@ function TranscriptImpl({
   }, [nav]);
 
   const showWorkingIndicator = shouldShowWorkingIndicator(display.showsWorking, display.bubbles);
+  const arcaWarning = useArcaShutdownBanner();
+  const showArcaBanner = arcaWarning.showForHost(hostId);
+  const hasPinnedBanner = display.hasTasks || showArcaBanner;
   return (
     <>
       {/* Task tracker pinned above the thread. Sibling of the viewport (not an
       overlay) so it shrinks the scroll area rather than covering messages.
       Self-hides with no tasks. */}
       <ChatPlanAccordion className="mt-14 md:mt-12" />
+      {showArcaBanner && <ArcaShutdownBanner warning={arcaWarning} hasTasks={display.hasTasks} />}
       {/* Wrapper div gives us a ref to scope the SelectionPopup to the
       conversation area without requiring Conversation to forward refs. */}
       <div
         ref={setConversationEl}
         className="@container/chat relative flex min-h-0 flex-1 overflow-hidden"
       >
-        <Conversation className={cn(!display.hasTasks && "chat-scroll-fade", "flex-1")}>
+        <Conversation
+          className={cn(
+            hasPinnedBanner ? "chat-scroll-composer-fade" : "chat-scroll-fade",
+            "flex-1",
+          )}
+        >
           <ConversationContent
             scrollClassName="transcript-hide-native-scrollbar"
             className={cn(
               CHAT_CONVERSATION_CONTENT_CLASS,
-              display.hasTasks ? "pt-4" : "pt-20",
+              hasPinnedBanner ? "pt-4" : "pt-20",
+              showArcaBanner && "chat-content-under-arca-banner",
               CHAT_COLUMN_WIDTH,
             )}
           >
@@ -427,13 +441,6 @@ function TranscriptImpl({
             />
           </ConversationContent>
           <ConversationScrollButton />
-          <UserMessageNavConnected
-            goPrev={nav.goPrev}
-            goNext={nav.goNext}
-            canPrev={nav.canPrev}
-            canNext={nav.canNext}
-            hidden={userMessageIds.length === 0}
-          />
         </Conversation>
         {/* Constant-height scrollbar. Sibling of Conversation so it escapes the
         chat-scroll-fade mask. */}
