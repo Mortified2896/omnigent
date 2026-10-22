@@ -229,9 +229,17 @@ function renderSidebar(
   extensions: ExtensionCatalogItem[] = [],
   onClose = vi.fn(),
   config: SidebarConfig = sidebarConfig,
+  brandVersions?: { official: string; private: string },
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const sidebar = <Sidebar open={open} onClose={onClose} onOpenSearch={onOpenSearch} />;
+  const sidebar = (
+    <Sidebar
+      open={open}
+      onClose={onClose}
+      onOpenSearch={onOpenSearch}
+      brandVersions={brandVersions}
+    />
+  );
   return render(
     <QueryClientProvider client={qc}>
       <SidebarDataProvider config={config}>
@@ -346,6 +354,22 @@ const TEST_EXTENSION: ExtensionCatalogItem = {
     style_url: null,
   },
 };
+
+it("keeps desktop version identity outside the Mac-hidden branding and peek header", () => {
+  mockConversations([]);
+  const view = renderSidebar(true, "/", undefined, undefined, [], vi.fn(), sidebarConfig, {
+    official: "0.18.0",
+    private: "custom01",
+  });
+  const desktopRow = view.container.querySelector(".sidebar-desktop-versions")!;
+  expect(
+    within(desktopRow as HTMLElement).getByRole("button", {
+      name: "Copy application versions",
+    }),
+  ).toHaveTextContent("Official base v0.18.0Private custom01");
+  expect(desktopRow.closest(".sidebar-brand, .sidebar-header-row")).toBeNull();
+  expect(desktopRow.nextElementSibling).toHaveAttribute("data-testid", "sidebar-primary-nav");
+});
 
 describe("Sidebar scroll divider", () => {
   it("separates fixed navigation only while sessions are scrolled", () => {
@@ -1660,7 +1684,8 @@ describe("Sidebar failed session indicator", () => {
       }
       renderSidebar();
 
-      const row = screen.getByRole("link", { name: id });
+      // Inline activity/timing text follows the title in the accessible name.
+      const row = screen.getByRole("link", { name: new RegExp(`^${id}`) });
       expect(within(row.closest("li")!).getByTestId("session-state-badge")).toHaveAttribute(
         "data-state",
         state,
@@ -3264,10 +3289,10 @@ describe("Sidebar view options", () => {
     renderGroupingSidebar();
 
     const links = within(groupSection("Sessions")).getAllByRole("link", { name: /^conv_/ });
-    expect(links.map((link) => link.textContent)).toEqual([
-      "conv_running",
-      "conv_done_new",
-      "conv_done_old",
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/c/conv_running",
+      "/c/conv_done_new",
+      "/c/conv_done_old",
     ]);
   });
 

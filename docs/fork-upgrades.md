@@ -14,6 +14,7 @@ routes. Extend the existing tests when upstream APIs or creation paths change.
 
 | Custom behavior | Feature modules | Integration and regression checks |
 | --- | --- | --- |
+| Visible official version and private revision; click to copy | `web/src/shell/ApplicationVersions.tsx` | Sidebar branding plus a separate Mac desktop row outside the hidden brand/header; component, sidebar/CSS tests and rendered browser, desktop-shell and mobile checks |
 | Advisor, Jev, exact model/connection/effort, task tags | `omnigent/model_advisor/`, `web/src/model-advisor/` | Session creation/events and host launch; `tests/model_advisor/`, route `test_*model_advisor.py`, exact native-selection tests |
 | Feedback, discussions, answer comparison, scoring isolation | Feedback/comparison server routes and stores; `ResponseFeedbackActions`, feedback helpers | Transcript bubbles and side-chat pane; feedback/comparison route and component tests, task-scoring tests |
 | Reports, search, narrated audio | `omnigent/server/scheduled/`, generated-audio modules, `web/src/components/scheduled/` | Scheduler routes/store and inbox; scheduled fire/routes, report settings/actions, audio-player/timing tests |
@@ -37,6 +38,9 @@ that actually removes conflict-prone code from an upstream file.
    current fork main, verify remotes and merge the exact release tag. Record
    both SHAs above. Preserve the official merge ancestry.
 2. Reconcile the features in the table, including automatically merged code.
+   Verify each shell layout: a component retained in source can still be hidden
+   by platform CSS. In particular, the Mac desktop shell hides the branding
+   block, so application versions must also render outside that block.
    New entry points must propagate caller identity, labels, conditional-update
    guards and exact transport. In 0.18 this includes
    `update_conversation_with_changes` and the reused-upload creation path.

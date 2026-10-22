@@ -1152,6 +1152,15 @@ describe("index.css electron-mac sidebar header", () => {
     expect(brandRule).toContain("display: none");
   });
 
+  it("reveals the separate version row in the Mac desktop sidebar", () => {
+    const versionRule = cssSource.match(
+      /\[data-electron-mac\] \.sidebar-desktop-versions \{[^}]*\}/,
+    )?.[0];
+    expect(versionRule).toContain("display: flex");
+    expect(versionRule).not.toContain(".sidebar-brand");
+    expect(versionRule).not.toContain(".sidebar-header-row");
+  });
+
   it("reserves the entire drag band before the sidebar content", () => {
     expect(headerRowRule).toContain("height: var(--mac-titlebar-height)");
   });

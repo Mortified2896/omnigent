@@ -800,6 +800,11 @@ html[data-electron-mac] {
   html[data-electron-mac] .sidebar-brand {
     display: none;
   }
+  /* Version identity belongs below the native drag strip, outside the hidden
+   * wordmark/header. Browsers and mobile use the normal branding copy. */
+  html[data-electron-mac] .sidebar-desktop-versions {
+    display: flex;
+  }
   /* The sidebar's own cluster is hidden here because an identical one renders in
    * the title-bar strip (AppShell), where it survives the sidebar collapsing to
    * w-0/inert and the peek card's inset-2 offset. Scoped to

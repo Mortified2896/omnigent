@@ -113,6 +113,7 @@ import {
   useSearchParams,
 } from "@/lib/routing";
 import { SidebarHeaderActions, SidebarSettingsButton } from "./SidebarHeaderActions";
+import { ApplicationVersions } from "./ApplicationVersions";
 import omnigentWordmark from "@/assets/omnigent-wordmark.svg";
 import { Button } from "@/components/ui/button";
 import {
@@ -180,7 +181,6 @@ import { isFeatureEnabled, isSingleUserMode, sandboxOptionLabel } from "@/lib/ca
 import { useBranding } from "@/lib/branding";
 import { relativeTime } from "@/lib/relativeTime";
 import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
-import { copyText } from "@/lib/clipboard";
 import { showToast } from "@/components/ui/toast";
 import { showArchiveUndoToast } from "./archiveUndoToast";
 import { unpinWithUndo } from "./unpinUndoToast";
@@ -1167,29 +1167,7 @@ function SidebarImpl({
                     />
                   )}
                 </Link>
-                {brandVersions && (
-                  <button
-                    type="button"
-                    title="Copy official and private versions"
-                    onClick={async () => {
-                      try {
-                        await copyText(`Omnigent
-Official base v${brandVersions.official}
-Private ${brandVersions.private}`);
-                        showToast("Versions copied");
-                      } catch {
-                        showToast("Couldn’t copy versions. Please try again.");
-                      }
-                    }}
-                    className="flex cursor-pointer flex-col rounded-sm text-left text-[10px] leading-3 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                    aria-label="Copy application versions"
-                  >
-                    <span>Official base v{brandVersions.official}</span>
-                    <span title="Private customization Git revision">
-                      Private {brandVersions.private}
-                    </span>
-                  </button>
-                )}
+                {brandVersions && <ApplicationVersions versions={brandVersions} />}
               </div>
               {/* On the macOS shell this copy is hidden and an identical cluster
             renders in the title-bar strip instead (see AppShell), so the icons
@@ -1203,6 +1181,14 @@ Private ${brandVersions.private}`);
                 onOpenSearch={onOpenSearch}
               />
             </div>
+
+            {/* macOS hides the brand/header for its native title bar. Keep the
+                version control outside both, including in the peek sidebar. */}
+            {brandVersions && (
+              <div className="sidebar-desktop-versions hidden shrink-0 px-4 pt-2 pb-1">
+                <ApplicationVersions versions={brandVersions} />
+              </div>
+            )}
 
             <div className="flex flex-col gap-px px-2 pt-2 pb-0" data-testid="sidebar-primary-nav">
               {/* "New session" routes to the home composer ("/"), which now owns
