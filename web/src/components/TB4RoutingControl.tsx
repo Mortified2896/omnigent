@@ -73,7 +73,9 @@ export function TB4RoutingControl({
         signal,
       });
       if (!response.ok)
-        throw new Error("Route evidence is unavailable. Refresh after collection succeeds.");
+        throw new Error(
+          "Route evidence is unavailable. Try again after routing health refresh succeeds.",
+        );
       return (await response.json()) as Preview;
     },
     staleTime: 15000,
@@ -166,7 +168,8 @@ export function TB4RoutingControl({
           <p className="text-xs text-muted-foreground">
             Uses published Terminal-Bench 4 scores from mini-swe-agent as a prior for Codex. Scores
             are not a prediction of success on this task. Prices limit model token rates, not the
-            total task bill. Unknown scores and costs are excluded.
+            total task bill. Unknown scores and costs are excluded. Each route also needs a recent
+            successful Responses request.
           </p>
           <div aria-live="polite">
             {pending ? (
@@ -187,7 +190,8 @@ export function TB4RoutingControl({
                   </p>
                 ) : (
                   <p className="mt-1 text-muted-foreground">
-                    No model meets these limits. Lower the floor or change the cost policy to start.
+                    No verified route meets these limits. Unavailable or unverified routes stay
+                    excluded even at a zero score floor. Try again later or change the cost policy.
                   </p>
                 )}
                 <details className="mt-3">

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
 import time
 import uuid
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -55,6 +57,29 @@ def rate(value) -> float | None:
         return None
 
 
+def merge_responses_health(evidence: dict, rows: list[dict]) -> dict:
+    """Overlay fresh, exact request outcomes without counting active calls or aliases."""
+    routes = dict(evidence.get("routes", {}))
+    for row in rows:
+        route = row.get("requestedModel")
+        status = rate(row.get("status"))
+        if not route or row.get("path") != "/v1/responses" or status is None or status < 200:
+            continue
+        try:
+            observed = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, AttributeError, TypeError, ValueError):
+            continue
+        if not 0 <= time.time() - observed <= 86400:
+            continue
+        if observed >= (rate(routes.get(route, {}).get("observed_at")) or 0):
+            routes[route] = {
+                "status": status,
+                "observed_at": observed,
+                "endpoint": "/v1/responses",
+            }
+    return {**evidence, "routes": routes}
+
+
 def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry: dict) -> dict:
     by_model: dict[str, list[dict]] = {}
     for row in registry["models"]:
@@ -92,6 +117,13 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
         recent = routes.get(route, {})
         if (rate(recent.get("status")) or 0) >= 400:
             excluded["Latest observed request failed"] += 1
+            continue
+        if (
+            rate(recent.get("status")) != 200
+            or recent.get("endpoint") != "/v1/responses"
+            or not 0 <= time.time() - (rate(recent.get("observed_at")) or 0) <= 86400
+        ):
+            excluded["No verified recent Responses success"] += 1
             continue
         # An explicit :free route is a public zero-price offering. Account quotas
         # remain limits, not permission to spill to a paid model.
@@ -139,9 +171,7 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
                 "cost_class": cost_class,
                 "input_usd_per_million": input_rate,
                 "output_usd_per_million": output_rate,
-                "health": "recent success"
-                if rate(recent.get("status")) == 200
-                else "not yet probed",
+                "health": "recent Responses success",
                 "source_url": best["source_url"],
                 "context_tokens": row.get("context_length"),
             }
@@ -149,7 +179,7 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
     eligible.sort(
         key=lambda r: (
             {"free": 0, "subscription": 1, "metered": 2}[r["cost_class"]],
-            r["health"] != "recent success",
+            r["health"] != "recent Responses success",
             r["input_usd_per_million"] or 0 if r["cost_class"] == "metered" else 0,
             -r["score"],
             r["route"],
@@ -177,15 +207,22 @@ async def catalogue(policy: TB4Policy) -> dict:
         raise OmnigentError("TB4 routing is not enabled on this server", code=ErrorCode.CONFLICT)
     try:
         client = OmniRouteClient.from_env()
-        response = await client._request("GET", "/v1/models", timeout=15)
+        # Read-only checks at preview and both launch boundaries close the gap
+        # between scheduled refreshes. A listing/healthy account alone is not
+        # evidence that this particular model works through Codex's endpoint.
+        async with asyncio.timeout(15):
+            response, recent = await asyncio.gather(
+                client._request("GET", "/v1/models", timeout=15),
+                client.list_call_logs(limit=100, offset=0),
+            )
         rows = response.body.get("data")
         if not isinstance(rows, list):
             raise ValueError("missing catalogue")
-        return evaluate(policy, rows, readiness(), benchmarks())
-    except (OmniRouteError, OSError, ValueError) as exc:
+        return evaluate(policy, rows, merge_responses_health(readiness(), recent), benchmarks())
+    except (OmniRouteError, OSError, ValueError, TimeoutError) as exc:
         raise OmnigentError(
             "The live route catalogue or account evidence is unavailable. "
-            "Try again after collection succeeds.",
+            "Try again after routing health refresh succeeds.",
             code=ErrorCode.CONFLICT,
         ) from exc
 
@@ -221,8 +258,9 @@ async def bind_policy(body, agent_name: str):
     candidates = result["eligible"]
     if not candidates:
         raise OmnigentError(
-            "No OmniRoute model meets this TB4 floor and cost policy. "
-            "Adjust the controls; no fallback was started.",
+            "No verified OmniRoute route meets this TB4 floor and cost policy. "
+            "Unavailable or unverified routes cannot be enabled by lowering the floor. "
+            "Try again later or explicitly change the cost policy; no fallback was started.",
             code=ErrorCode.CONFLICT,
         )
     selected = candidates[0]

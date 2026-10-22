@@ -55,7 +55,7 @@ describe("TB4 routing controls", () => {
     fireEvent.change(screen.getByRole("spinbutton", { name: /Maximum output/ }), {
       target: { value: "0.8" },
     });
-    await screen.findByText(/No model meets these limits/);
+    await screen.findByText(/No verified route meets these limits/);
     await waitFor(() => {
       const calls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/preview"));
       expect(JSON.parse(String(calls.at(-1)?.[1]?.body))).toMatchObject({

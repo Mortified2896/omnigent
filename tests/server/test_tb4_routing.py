@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 from pydantic import ValidationError
@@ -30,7 +31,16 @@ def fixtures():
             "pricing": {"input": 1, "output": 4},
         }
     ]
-    evidence = {"providers": {"provider": {"active": True, "cost_class": "free"}}}
+    evidence = {
+        "providers": {"provider": {"active": True, "cost_class": "free"}},
+        "routes": {
+            "provider/model-a": {
+                "status": 200,
+                "endpoint": "/v1/responses",
+                "observed_at": time.time(),
+            }
+        },
+    }
     return catalogue, evidence, registry
 
 
@@ -136,7 +146,7 @@ async def test_empty_pool_never_starts_fallback(monkeypatch):
     body = SessionCreateRequest(
         agent_id="00000000-0000-0000-0000-000000000001", tb4_policy=TB4Policy()
     )
-    with pytest.raises(Exception, match="No OmniRoute model"):
+    with pytest.raises(Exception, match="No verified OmniRoute route"):
         await bind_policy(body, "codex-native-ui")
 
 
@@ -241,3 +251,99 @@ async def test_launch_revalidates_exact_route_and_endpoint(monkeypatch):
         await service.validate_pinned_launch(
             {}, "provider/model-a", "low", "http://127.0.0.1:20128/v1"
         )
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        {},
+        {"status": 200},
+        {"status": 0, "endpoint": "/v1/responses", "observed_at": time.time()},
+        {"status": 404, "endpoint": "/v1/responses", "observed_at": time.time()},
+        {"status": 200, "endpoint": "/v1/chat/completions", "observed_at": time.time()},
+        {"status": 200, "endpoint": "/v1/responses", "observed_at": time.time() - 86401},
+        {"status": 200, "endpoint": "/v1/responses", "observed_at": time.time() + 86400},
+    ],
+)
+def test_catalogue_and_active_account_do_not_prove_a_working_route(outcome):
+    rows, evidence, registry = fixtures()
+    evidence["routes"] = {"provider/model-a": outcome}
+    assert not evaluate(TB4Policy(minimum_score=0), rows, evidence, registry)["eligible"]
+
+
+def test_recent_responses_failure_overrides_snapshot_and_other_endpoint_success():
+    from datetime import datetime, timezone
+
+    from omnigent.server.tb4_routing.service import merge_responses_health
+
+    rows, evidence, registry = fixtures()
+    now = time.time()
+    evidence["routes"]["provider/model-a"]["observed_at"] = now - 60
+
+    def log(status, offset=0, **changes):
+        return {
+            "requestedModel": "provider/model-a",
+            "path": "/v1/responses",
+            "timestamp": datetime.fromtimestamp(now + offset, timezone.utc).isoformat(),
+            "status": status,
+            **changes,
+        }
+
+    merged = merge_responses_health(
+        evidence,
+        [
+            log(404, -2),
+            log(200, -3),
+            log(200, -1, path="/v1/chat/completions"),
+            log(0),
+            log(200, requestedModel=None, model="model-a"),
+        ],
+    )
+    assert merged["routes"]["provider/model-a"]["status"] == 404
+    assert evidence["routes"]["provider/model-a"]["status"] == 200
+    assert not evaluate(TB4Policy(), rows, merged, registry)["eligible"]
+    recovered = merge_responses_health(merged, [log(200)])
+    assert evaluate(TB4Policy(), rows, recovered, registry)["eligible_routes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_catalogue_reads_live_outcomes_before_auditing_launch(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    from omnigent.server.tb4_routing import service
+
+    rows, evidence, registry = fixtures()
+    evidence["routes"]["provider/model-a"]["observed_at"] -= 60
+
+    class Client:
+        async def _request(self, *args, **kwargs):
+            return type("Response", (), {"body": {"data": rows}})()
+
+        async def list_call_logs(self, **kwargs):
+            return [
+                {
+                    "requestedModel": "provider/model-a",
+                    "path": "/v1/responses",
+                    "status": 404,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
+
+    monkeypatch.setenv("OMNIGENT_TB4_ROUTING_ENABLED", "1")
+    monkeypatch.setenv("OMNIGENT_TB4_AUDIT_DIR", str(tmp_path))
+    monkeypatch.setattr(service.OmniRouteClient, "from_env", Client)
+    monkeypatch.setattr(service, "readiness", lambda: evidence)
+    monkeypatch.setattr(service, "benchmarks", lambda: registry)
+    body = SessionCreateRequest(
+        agent_id="00000000-0000-0000-0000-000000000001", tb4_policy=TB4Policy()
+    )
+    with pytest.raises(Exception, match="No verified OmniRoute route"):
+        await bind_policy(body, "codex-native-ui")
+    assert not list(tmp_path.iterdir())
+
+    async def unavailable(**kwargs):
+        raise service.OmniRouteError("offline")
+
+    monkeypatch.setattr(Client, "list_call_logs", lambda self, **kwargs: unavailable(**kwargs))
+    with pytest.raises(Exception, match="unavailable"):
+        await service.catalogue(TB4Policy())
