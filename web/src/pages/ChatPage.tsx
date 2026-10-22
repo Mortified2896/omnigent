@@ -4586,7 +4586,10 @@ function ComposerImpl(
           <div ref={setAdvisorSettingsTarget} />
         </DialogContent>
       </Dialog>
-      <div className="max-h-[45dvh] overflow-y-auto" ref={setAdvisorFeedbackTarget} />
+      <div
+        className={cn("mx-auto max-h-[45dvh] overflow-y-auto", COMPOSER_COLUMN_WIDTH)}
+        ref={setAdvisorFeedbackTarget}
+      />
       {advisorSubmissionActive && pendingAdvisorSend !== null && !advisorFlowLocked ? (
         <Button
           type="button"

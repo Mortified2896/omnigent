@@ -535,6 +535,43 @@ it("surfaces a catalog failure as a visible reason", async () => {
   expect(await screen.findByTestId("model-advisor-catalog-error")).toBeDefined();
 });
 
+it("keeps catalog failure controls in the composer and feedback in its target", async () => {
+  api.mockImplementation(async (url: string) => {
+    if (url.includes("/catalog")) return Response.json({ detail: "host offline" }, { status: 502 });
+    if (url.includes("/preferences")) return Response.json(prefsDto);
+    throw new Error(`Unexpected API call: ${url}`);
+  });
+  const feedbackTarget = document.createElement("div");
+  const { container } = mountSection({ feedbackTarget });
+  try {
+    await waitFor(() =>
+      expect(
+        feedbackTarget.querySelector("[data-testid='model-advisor-catalog-error']"),
+      ).toHaveTextContent("host offline"),
+    );
+    expect(advisorModelTarget).toContainElement(
+      screen.getByRole("switch", { name: "Enable Advisor" }),
+    );
+    expect(container).toBeEmptyDOMElement();
+  } finally {
+    cleanup();
+  }
+});
+
+it("does not duplicate the chat toolbar toggle when its catalog is unavailable", async () => {
+  api.mockImplementation(async (url: string) => {
+    if (url.includes("/catalog"))
+      return Response.json({ detail: "Claude host model-options lookup failed" }, { status: 502 });
+    if (url.includes("/preferences")) return Response.json(prefsDto);
+    throw new Error(`Unexpected API call: ${url}`);
+  });
+  const { container } = mountSection({ selectorsOnly: true });
+  await screen.findByTestId("model-advisor-catalog-error");
+  expect(screen.queryByRole("switch", { name: "Enable Advisor" })).not.toBeInTheDocument();
+  expect(advisorModelTarget).toBeEmptyDOMElement();
+  expect(container).toHaveTextContent("Claude host model-options lookup failed");
+});
+
 it("lets an explicitly disabled Advisor send when its catalog is unavailable", async () => {
   prefsDto = { ...prefsDto, logical_preferences: { ...V2_PREFERENCES, enabled: false } };
   api.mockImplementation(async (url: string) => {

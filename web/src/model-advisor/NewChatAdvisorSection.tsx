@@ -118,7 +118,7 @@ export interface NewChatAdvisorSectionProps {
   feedbackTarget?: HTMLElement | null;
   enabledOverride?: boolean;
   autoSubmit?: boolean;
-  /** Render persistent recommender/settings controls. Chat follow-ups disable this. */
+  /** Render recommender/settings controls; selectorsOnly uses the parent toolbar's toggle. */
   showComposerControls?: boolean;
   /** Optional externally controlled settings state and portal for compact chat integration. */
   settingsOpenOverride?: boolean;
@@ -1110,10 +1110,9 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
       </span>
     </Button>
   );
-  if (catalogError !== null)
-    return (
+  if (catalogError !== null) {
+    const catalogFeedback = (
       <div className="flex flex-wrap items-center gap-2 py-2">
-        {showComposerControls ? controls : null}
         <p
           className="text-sm text-muted-foreground"
           role="status"
@@ -1126,6 +1125,17 @@ export function NewChatAdvisorSection(props: NewChatAdvisorSectionProps) {
         </p>
       </div>
     );
+    return (
+      <>
+        {showComposerControls && !selectorsOnly
+          ? advisorModelTarget
+            ? createPortal(controls, advisorModelTarget)
+            : controls
+          : null}
+        {feedbackTarget ? createPortal(catalogFeedback, feedbackTarget) : catalogFeedback}
+      </>
+    );
+  }
   const settingsPanel = settingsOpen ? (
     <ProviderSettingsPanel
       idPrefix={`model-advisor-${scope.replace(/[^A-Za-z0-9_-]/g, "-")}`}

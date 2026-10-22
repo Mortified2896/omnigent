@@ -6298,6 +6298,35 @@ describe("saved sandbox inference policy", () => {
 });
 
 describe("Model Advisor in an existing chat", () => {
+  it("keeps one Advisor toggle and aligns catalog errors with the composer", async () => {
+    advisorFetch.mockImplementation(async () =>
+      Response.json({ detail: "Claude host model-options lookup failed" }, { status: 502 }),
+    );
+    renderWithTooltips(
+      <Composer
+        {...composerProps({
+          modelPickerKind: "codex",
+          advisorHostId: "host_1",
+          advisorAgentId: "ag_1",
+          advisorWorkspace: "/repo",
+          advisorHumanPick: {
+            model: "gpt-6.1-sol",
+            accessLane: "codex-direct",
+            effort: "medium",
+          },
+        })}
+      />,
+    );
+    const error = await screen.findByTestId("model-advisor-catalog-error");
+    expect(error).toHaveTextContent("Claude host model-options lookup failed");
+    expect(screen.getByTestId("chat-advisor-toolbar")).toContainElement(
+      screen.getByTestId("chat-model-advisor-toggle"),
+    );
+    expect(screen.queryByRole("switch", { name: "Enable Advisor" })).not.toBeInTheDocument();
+    expect(error.parentElement?.parentElement).toHaveClass("mx-auto", "w-full");
+    expect(error.parentElement?.parentElement).toHaveClass(...CHAT_COLUMN_WIDTH.split(" "));
+  });
+
   it.each([false, true])(
     "unlocks the toggle after confirming an Advisor follow-up (attachments: %s)",
     async (withAttachments) => {
