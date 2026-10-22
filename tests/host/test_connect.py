@@ -3877,6 +3877,9 @@ def test_build_runner_env_allowlists_host_env_and_strips_secrets(tmp_path: Path)
         "OMNIGENT_LOG_TO_STDERR": "1",
         "OMNIGENT_LOG_TTY_FD": "9",
         "OMNIGENT_DEBUG_LOG_CLIENT_SECRET_COMMAND": "credential-helper --format raw",
+        "OMNIGENT_TB4_ROUTING_ENABLED": "1",
+        "OMNIGENT_TB4_ROUTE_EVIDENCE": "/private/analysis/routing-evidence.json",
+        "OMNIGENT_TB4_UNRELATED_SECRET": "must-not-forward",
     }
 
     env = _build_runner_env(
@@ -3893,6 +3896,9 @@ def test_build_runner_env_allowlists_host_env_and_strips_secrets(tmp_path: Path)
     )
 
     assert env[RUNNER_INTERACTIVE_SHELLS_ENV_VAR] == '["zsh", "bash"]'
+    assert env["OMNIGENT_TB4_ROUTING_ENABLED"] == "1"
+    assert env["OMNIGENT_TB4_ROUTE_EVIDENCE"] == "/private/analysis/routing-evidence.json"
+    assert "OMNIGENT_TB4_UNRELATED_SECRET" not in env
 
     # Process essentials + the locale family pass through.
     assert env["PATH"] == "/usr/bin:/bin"

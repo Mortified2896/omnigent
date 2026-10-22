@@ -557,7 +557,11 @@ async def recover_advisor_session_transport(
         result = await service.recover_session_transport(user_id, session_id)
         store = service._conversation_store
         conv = await asyncio.to_thread(store.get_conversation, session_id)
-        if conv is None or (conv.labels or {}).get("omnigent.advisor.fallback_pending") != "1":
+        if (
+            conv is None
+            or (conv.labels or {}).get("omnigent.routing_policy") == "tb4"
+            or (conv.labels or {}).get("omnigent.advisor.fallback_pending") != "1"
+        ):
             return result
         if conv.live_status in {"running", "waiting"}:
             raise OmnigentError(

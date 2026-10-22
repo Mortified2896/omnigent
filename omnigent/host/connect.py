@@ -709,6 +709,10 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         "OMNIGENT_TELEMETRY_ENABLED",
         # Preserve the harness stderr opt-in through daemon and runner hops.
         "OMNIGENT_HARNESS_STDERR_ENABLED",
+        # Revalidate pinned benchmark routes in spawned native runners. These
+        # are a feature flag and a local evidence path, never credentials.
+        "OMNIGENT_TB4_ROUTING_ENABLED",
+        "OMNIGENT_TB4_ROUTE_EVIDENCE",
         # Opaque request-routing headers (dev/test): a JSON header map folded by
         # cli_auth.databricks_request_headers into every client→server connection
         # so a request pins to a specific server instance/replica. Must reach the

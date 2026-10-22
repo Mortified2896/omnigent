@@ -1935,6 +1935,8 @@ def test_failed_advisor_chat_recovers_exact_direct_transport(db_uri, monkeypatch
         "busy",
         "unsupported_effort",
         "unauthorized",
+        "tb4",
+        "tb4_pending_recovery",
     ],
 )
 def test_manual_omniroute_chat_recovers_direct_without_an_advisor_round(db_uri, monkeypatch, mode):
@@ -1955,6 +1957,12 @@ def test_manual_omniroute_chat_recovers_direct_without_an_advisor_round(db_uri, 
             "omnigent.access_lane": "omniroute",
             "omnigent.last_task_error_code": "codex_turn_error",
             **({"omnigent.advisor.manual_choice": "1"} if mode == "manual_after_advisor" else {}),
+            **({"omnigent.routing_policy": "tb4"} if mode.startswith("tb4") else {}),
+            **(
+                {"omnigent.advisor.fallback_pending": "1"}
+                if mode == "tb4_pending_recovery"
+                else {}
+            ),
         },
         model_override="codex/gpt-5.5",
         reported_model="gpt-5.5",
@@ -1986,12 +1994,19 @@ def test_manual_omniroute_chat_recovers_direct_without_an_advisor_round(db_uri, 
             },
             json={},
         )
-        if mode in {"busy", "unsupported_effort", "unauthorized"}:
+        if mode in {"busy", "unsupported_effort", "unauthorized", "tb4", "tb4_pending_recovery"}:
             assert (
                 response.status_code
-                == {"busy": 200, "unsupported_effort": 409, "unauthorized": 403}[mode]
+                == {
+                    "busy": 200,
+                    "unsupported_effort": 409,
+                    "unauthorized": 403,
+                    "tb4": 200,
+                    "tb4_pending_recovery": 200,
+                }[mode]
             )
             assert not store.updates
+            assert conversation.labels["omnigent.access_lane"] == "omniroute"
             reset.assert_not_awaited()
             ready.assert_not_awaited()
             return

@@ -2080,6 +2080,10 @@ class ModelAdvisorService:
         if conv is None:
             raise HTTPException(404, "session not found")
         labels = conv.labels or {}
+        if labels.get("omnigent.routing_policy") == "tb4":
+            # The benchmark/cost contract pins the gateway route. Direct
+            # recovery could change both entitlement and execution identity.
+            return {"changed": False}
         raw_plan = decode_transport_binding_label(labels, ADVISOR_TRANSPORT_PLAN_LABEL_KEY)
         if raw_plan is None or labels.get(ADVISOR_MANUAL_CHOICE_LABEL_KEY) == "1":
             return await self._recover_manual_session_transport(user_id, conv)
