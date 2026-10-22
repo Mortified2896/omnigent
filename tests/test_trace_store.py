@@ -226,3 +226,25 @@ def test_hex_ids_and_latest_human_outcome_projection(tmp_path):
         )
     omnigent(store, "omni", path)
     assert store.db.execute("SELECT count(*) FROM human_outcomes").fetchone()[0] == 0
+
+
+def test_checkpointed_wal_database_in_read_only_directory(tmp_path):
+    import os
+
+    source = tmp_path / "readonly"
+    source.mkdir()
+    path = source / "native.db"
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE records(value TEXT)")
+        db.execute("INSERT INTO records VALUES ('evidence')")
+    db.close()
+    before = path.read_bytes()
+    os.chmod(source, 0o555)
+    try:
+        with source_db(path) as reader:
+            assert reader.execute("SELECT value FROM records").fetchone()[0] == "evidence"
+        assert path.read_bytes() == before
+        assert sorted(p.name for p in source.iterdir()) == ["native.db"]
+    finally:
+        os.chmod(source, 0o755)

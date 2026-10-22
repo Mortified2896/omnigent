@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -98,15 +100,59 @@ def digest(value: object) -> str:
 @contextmanager
 def source_db(path: Path):
     """Consistent read transaction; never open a missing source in write mode."""
-    conn = sqlite3.connect(f"file:{quote(str(path.resolve()))}?mode=ro", uri=True, timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA query_only=ON")
-    conn.execute("BEGIN")
+
+    def connect(candidate):
+        conn = sqlite3.connect(
+            f"file:{quote(str(candidate.resolve()))}?mode=ro", uri=True, timeout=15
+        )
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("BEGIN")
+        try:
+            conn.execute("SELECT count(*) FROM sqlite_schema").fetchone()
+        except sqlite3.Error:
+            conn.close()
+            raise
+        return conn
+
+    temporary = None
+    try:
+        conn = connect(path)
+    except sqlite3.OperationalError as exc:
+        # An inactive WAL-mode DB can need a new -shm even for a read-only
+        # connection. Never create it in a native history directory. Only a
+        # quiescent, checkpointed DB qualifies for this temporary-copy fallback;
+        # active/uncheckpointed WALs must remain readable through SQLite itself.
+        if exc.sqlite_errorcode & 0xFF not in (sqlite3.SQLITE_READONLY, sqlite3.SQLITE_CANTOPEN):
+            raise
+        if not path.is_file():
+            raise
+        sidecars = [Path(str(path) + suffix) for suffix in ("-wal", "-journal")]
+
+        def identity():
+            stat = path.stat()
+            if any(p.exists() and p.stat().st_size for p in sidecars):
+                raise sqlite3.OperationalError("Source has a live WAL or recovery journal")
+            return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+        before = identity()
+        temporary = tempfile.TemporaryDirectory(prefix="omnigent-trace-read-")
+        try:
+            copy = Path(temporary.name) / path.name
+            shutil.copyfile(path, copy)
+            if identity() != before:
+                raise sqlite3.OperationalError("Source changed during read-only snapshot")
+            conn = connect(copy)
+        except Exception:
+            temporary.cleanup()
+            raise
     try:
         yield conn
     finally:
         conn.rollback()
         conn.close()
+        if temporary:
+            temporary.cleanup()
 
 
 class Store:

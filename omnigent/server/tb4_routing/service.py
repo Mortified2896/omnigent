@@ -213,6 +213,10 @@ async def bind_policy(body, agent_name: str):
             "TB4 routing owns the model and effort; clear other routing choices",
             code=ErrorCode.INVALID_INPUT,
         )
+    if any(item.model_override is not None for item in body.initial_items):
+        raise OmnigentError(
+            "TB4 routing owns initial-turn model choices", code=ErrorCode.INVALID_INPUT
+        )
     result = await catalogue(body.tb4_policy)
     candidates = result["eligible"]
     if not candidates:
@@ -250,3 +254,25 @@ async def bind_policy(body, agent_name: str):
             },
         }
     )
+
+
+async def validate_pinned_launch(
+    policy: dict, route: str | None, effort: str | None, endpoint: str | None
+) -> dict:
+    """The broad gateway catalogue, not Codex's vendor list, owns TB4 routes."""
+    client = OmniRouteClient.from_env()
+    expected = client.base_url.rstrip("/").removesuffix("/v1") + "/v1"
+    if not endpoint or endpoint.rstrip("/") != expected:
+        raise RuntimeError("TB4 launch does not use the verified OmniRoute endpoint")
+    result = await catalogue(TB4Policy.model_validate(policy))
+    selected = next(
+        (
+            row
+            for row in result["eligible"]
+            if row["route"] == route and row["effort"] == (effort or "default")
+        ),
+        None,
+    )
+    if selected is None:
+        raise RuntimeError("The pinned TB4 route is no longer eligible; no fallback was started")
+    return selected

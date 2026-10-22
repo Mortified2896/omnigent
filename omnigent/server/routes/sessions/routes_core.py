@@ -2356,6 +2356,11 @@ def register_core_routes(
         if conv is None or conv.agent_id is None:
             raise _session_not_found()
         _reject_advisor_route_change(conv, {"model_override"})
+        from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
+
+        protect_recorded_policy(
+            conv.labels or {}, {"model_override": conv.model_override}, {"model_override": None}
+        )
         try:
             validate_model_override(body.expected_model_override)
         except ValueError as exc:

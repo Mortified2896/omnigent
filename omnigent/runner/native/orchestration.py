@@ -645,6 +645,7 @@ class _CodexNativeLaunchConfig:
     turn_routing: bool = False
     advisor_round_id: str | None = None
     advisor_connection_id: str | None = None
+    tb4_policy: dict[str, Any] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1578,8 +1579,21 @@ async def _codex_native_launch_config(
     access_lane: str | None = None
     advisor_round_id: str | None = None
     advisor_connection_id: str | None = None
+    tb4_policy = None
     labels = snapshot.get("labels")
     if isinstance(labels, dict):
+        if labels.get("omnigent.routing_policy") == "tb4":
+            if (
+                not model_override
+                or labels.get("omnigent.tb4.route") != model_override
+                or labels.get("omnigent.access_lane") != "omniroute"
+                or not labels.get("omnigent.tb4.receipt")
+                or _cost_control != "off"
+            ):
+                raise RuntimeError("TB4 launch binding is incomplete; no fallback is allowed")
+            tb4_policy = json.loads(labels["omnigent.tb4.policy"])
+            if not isinstance(tb4_policy, dict):
+                raise RuntimeError("Invalid TB4 launch policy")
         _fsi = labels.get(FORK_SOURCE_LABEL_KEY)
         if isinstance(_fsi, str) and _fsi:
             fork_source_id = _fsi
@@ -1649,7 +1663,7 @@ async def _codex_native_launch_config(
                 connection_id=raw_connection if isinstance(raw_connection, str) else None,
             )
     if reasoning_effort is not None:
-        if advisor_round_id:
+        if advisor_round_id or tb4_policy is not None:
             # Advisor candidates are already concrete model+effort rows from
             # the authenticated host catalog. Preserve that exact spelling;
             # the ordinary Codex path's max/ultra aliasing is a fallback
@@ -1699,6 +1713,7 @@ async def _codex_native_launch_config(
         turn_routing=routing_class.turn_routing,
         advisor_round_id=advisor_round_id,
         advisor_connection_id=advisor_connection_id,
+        tb4_policy=tb4_policy,
     )
 
 
@@ -5242,15 +5257,47 @@ async def _auto_create_codex_terminal(
             extra={"session_id": session_id},
         )
     pick_to_reset: str | None = None
+    if launch_config.tb4_policy is not None:
+        from omnigent.harnesses.codex_native.app_server import native_codex_launch_base_url
+        from omnigent.server.tb4_routing.service import validate_pinned_launch
+
+        selected = await validate_pinned_launch(
+            launch_config.tb4_policy,
+            launch_config.model_override,
+            launch_config.reasoning_effort,
+            native_codex_launch_base_url(_codex_launch),
+        )
+        if _codex_launch.model != selected["route"]:
+            raise RuntimeError("TB4 provider changed the selected model; refusing launch")
+        # Codex's bundled vendor catalogue cannot validate other providers.
+        # Keep the exact route, avoid shared model aliases/migrations, and cap
+        # context at the freshly checked gateway limit.
+        window = int(selected["context_tokens"])
+        _codex_launch = dataclasses.replace(
+            _codex_launch,
+            ignore_source_model_catalog=True,
+            config_overrides=[
+                *_codex_launch.config_overrides,
+                f"model_context_window={window}",
+                f"model_auto_compact_token_limit={int(window * 0.8)}",
+            ],
+        )
+        _fresh_codex_catalog = [
+            {"id": selected["route"], "model": selected["route"], "upgrade": None}
+        ]
     # Explicit launches (model-flows design §4): validate an explicit request
     # against the shared catalog, and give a Default launch on codex's own
     # login the ACCOUNT's real default — so the ``model =`` line copied from
     # the user's shared config can never govern a session (the stale-gpt-5.4
     # 400 class). Profile-backed shapes already resolve their default at
     # materialization time and are left alone.
-    if codex_binding is None and (
-        launch_config.model_override
-        or (_codex_launch.model is None and _codex_launch.profile is None)
+    if (
+        launch_config.tb4_policy is None
+        and codex_binding is None
+        and (
+            launch_config.model_override
+            or (_codex_launch.model is None and _codex_launch.profile is None)
+        )
     ):
         from omnigent.harnesses.codex_native.app_server import (
             codex_launch_catalog,

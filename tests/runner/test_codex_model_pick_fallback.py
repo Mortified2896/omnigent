@@ -695,3 +695,60 @@ async def test_newer_pick_survives_reset_after_slow_fallback_launch(
     assert harness.snapshot["model_override"] == new_pick
     assert harness.resets == [{"expected_model_override": _RETIRED_PICK}]
     assert harness.builds[0]["model"] == _PROVIDER_DEFAULT
+
+
+@pytest.mark.asyncio
+async def test_tb4_foreign_route_uses_gateway_evidence_without_vendor_fallback(
+    codex_launch_harness, monkeypatch
+):
+    from omnigent.server.tb4_routing import service
+
+    harness = codex_launch_harness
+    route = "provider/foreign-model:free"
+    harness.snapshot.update(
+        model_override=route,
+        cost_control_mode_override="off",
+        labels={
+            "omnigent.routing_policy": "tb4",
+            "omnigent.access_lane": "omniroute",
+            "omnigent.tb4.route": route,
+            "omnigent.tb4.receipt": "receipt",
+            "omnigent.tb4.policy": '{"minimum_score":1,"cost_mode":"free"}',
+        },
+    )
+    harness.seed_catalog(
+        [{"id": _PROVIDER_DEFAULT, "model": _PROVIDER_DEFAULT, "isDefault": True}],
+        access_lane="omniroute",
+    )
+    validate = AsyncMock(return_value={"route": route, "context_tokens": 64000})
+    monkeypatch.setattr(service, "validate_pinned_launch", validate)
+    await harness.launch()
+    assert harness.resets == []
+    assert harness.builds[0]["model"] == route
+    assert "model_context_window=64000" in harness.builds[0]["extra_config_overrides"]
+    validate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_tb4_missing_gateway_evidence_fails_before_launch(codex_launch_harness, monkeypatch):
+    from omnigent.server.tb4_routing import service
+
+    harness = codex_launch_harness
+    route = "provider/foreign-model:free"
+    harness.snapshot.update(
+        model_override=route,
+        cost_control_mode_override="off",
+        labels={
+            "omnigent.routing_policy": "tb4",
+            "omnigent.access_lane": "omniroute",
+            "omnigent.tb4.route": route,
+            "omnigent.tb4.receipt": "receipt",
+            "omnigent.tb4.policy": "{}",
+        },
+    )
+    monkeypatch.setattr(
+        service, "validate_pinned_launch", AsyncMock(side_effect=RuntimeError("no fallback"))
+    )
+    with pytest.raises(RuntimeError, match="no fallback"):
+        await harness.launch()
+    assert harness.resets == [] and harness.builds == []

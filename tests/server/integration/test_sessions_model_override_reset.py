@@ -170,3 +170,25 @@ async def test_conditional_reset_requires_an_existing_agent_bound_session(
         conversation = store.get_conversation(session_id)
         assert conversation is not None
         assert conversation.model_override == _REJECTED_PICK
+
+
+async def test_tb4_pin_cannot_be_reset_by_runner(client, db_uri):
+    session_id = await _create_pinned_session(client)
+    store = SqlAlchemyConversationStore(db_uri)
+    store.update_conversation(session_id, labels={"omnigent.routing_policy": "tb4"})
+    response = await client.post(
+        f"/v1/sessions/{session_id}/model-override/reset",
+        json={"expected_model_override": _REJECTED_PICK},
+    )
+    assert response.status_code == 409
+    assert store.get_conversation(session_id).model_override == _REJECTED_PICK
+
+    event = await client.post(
+        f"/v1/sessions/{session_id}/events",
+        json={
+            "type": "message",
+            "model_override": "provider/unapproved",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "test"}]},
+        },
+    )
+    assert event.status_code == 409

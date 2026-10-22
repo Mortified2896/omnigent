@@ -1166,6 +1166,14 @@ def register_events_routes(
         :raises OmnigentError: 404 if no session exists.
         """
         user_id, conv = await _authorized_conversation(request, session_id)
+        if body.model_override is not None:
+            from omnigent.server.o3_routing_review.session_policy import protect_recorded_policy
+
+            protect_recorded_policy(
+                conv.labels or {},
+                {"model_override": conv.model_override},
+                {"model_override": body.model_override},
+            )
         if in_flight is not None:
             # Marked only after authorization, so an unauthorized caller
             # cannot flip a session to "running" even transiently.

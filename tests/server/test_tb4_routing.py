@@ -214,3 +214,30 @@ async def test_preview_auth_origin_and_json_guards(monkeypatch):
         ).status_code == 415
         result = await client.post("/v1/routing/tb4/preview", json={}, headers=auth)
         assert result.status_code == 200 and result.json()["eligible_routes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_launch_revalidates_exact_route_and_endpoint(monkeypatch):
+    from omnigent.server.tb4_routing import service
+
+    rows, evidence, registry = fixtures()
+
+    async def preview(policy):
+        return evaluate(policy, rows, evidence, registry)
+
+    monkeypatch.setattr(service, "catalogue", preview)
+    monkeypatch.setattr(
+        service.OmniRouteClient,
+        "from_env",
+        lambda: type("Client", (), {"base_url": "http://127.0.0.1:20128"})(),
+    )
+    result = await service.validate_pinned_launch(
+        {}, "provider/model-a", "high", "http://127.0.0.1:20128/v1"
+    )
+    assert result["route"] == "provider/model-a"
+    with pytest.raises(RuntimeError, match="endpoint"):
+        await service.validate_pinned_launch({}, "provider/model-a", "high", "https://other/v1")
+    with pytest.raises(RuntimeError, match="no fallback"):
+        await service.validate_pinned_launch(
+            {}, "provider/model-a", "low", "http://127.0.0.1:20128/v1"
+        )
