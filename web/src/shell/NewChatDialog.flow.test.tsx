@@ -259,6 +259,8 @@ function setAgents(agents: AvailableAgent[]): void {
   >);
 }
 
+let tb4RoutingEnabled = false;
+
 function renderLanding(
   cachedSessionIds: string[] = [],
   infoOverrides: Partial<ServerInfo> = {},
@@ -266,6 +268,9 @@ function renderLanding(
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  // Keep feature discovery out of create-transport call-count assertions.
+  // Policy tests opt in while exercising the real controls and create body.
+  client.setQueryData(["tb4-routing-enabled"], { enabled: tb4RoutingEnabled });
   if (cachedSessionIds.length > 0) {
     // Sessions already on screen when the create starts. "Never seen by this
     // tab" is part of how the screen recognizes its own announced row, so the
@@ -407,6 +412,7 @@ function closeAgentConfig(): void {
 }
 
 beforeEach(() => {
+  tb4RoutingEnabled = false;
   navigateMock.mockReset();
   setPendingInitialPromptMock.mockReset();
   beginLocalConversationMock.mockReset();
@@ -448,6 +454,58 @@ afterEach(() => {
 });
 
 describe("NewChatLandingScreen create flow", () => {
+  it("preserves the TB4 cost policy and draft after a rejected launch", async () => {
+    tb4RoutingEnabled = true;
+    setAgents([agent({ id: "ag_codex", name: "codex-native-ui", display_name: "Codex" })]);
+    beginLocalConversationMock.mockReturnValue({
+      tempConvId: "temp:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      pendingMsgTempId: "pend_tb4",
+      createToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    vi.mocked(authenticatedFetch).mockImplementation(async (url) => {
+      if (url === "/v1/routing/tb4") return new Response(JSON.stringify({ enabled: true }));
+      if (url === "/v1/routing/tb4/preview") {
+        return new Response(
+          JSON.stringify({
+            eligible_models: 0,
+            eligible_routes: 0,
+            eligible: [],
+            exclusions: {},
+            benchmark: {},
+          }),
+        );
+      }
+      return new Response(JSON.stringify({ detail: "No verified route meets this policy" }), {
+        status: 409,
+      });
+    });
+    renderLanding();
+    await waitForWorkspaceSeed();
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Choose by TB4/ }));
+    const controls = within(screen.getByRole("region", { name: "TB4 model selection" }));
+    fireEvent.change(controls.getByRole("slider"), { target: { value: "0" } });
+    fireEvent.change(controls.getByRole("combobox"), { target: { value: "free" } });
+    typeMessage("Keep my free-only task");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await screen.findByText("No verified route meets this policy");
+    expect(beginLocalConversationMock).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("new-chat-landing-input")).toHaveValue("Keep my free-only task");
+    expect(controls.getByRole("combobox")).toHaveValue("free");
+    expect(controls.getByRole("slider")).toHaveValue("0");
+    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+    await waitFor(() => {
+      const creates = vi
+        .mocked(authenticatedFetch)
+        .mock.calls.filter(([url]) => url === "/v1/sessions");
+      expect(creates).toHaveLength(2);
+      expect(JSON.parse(String(creates[1][1]?.body)).tb4_policy).toMatchObject({
+        minimum_score: 0,
+        cost_mode: "free",
+      });
+    });
+  });
+
   it.each([
     { query: "canvas=main", canvasId: "main", project: undefined },
     {

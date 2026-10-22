@@ -5845,35 +5845,40 @@ export function NewChatLandingScreen() {
         // Normal path: bind to an existing registered agent.
         const provisional = newTempConversation();
         try {
-          localConv = beginLocalConversation(
-            initialPrompt,
-            files,
-            provisional,
-            localProject,
-            {
-              // Seed the temp session with the NORMALIZED create identity so the
-              // optimistic composer shows the model/effort/harness/routing being
-              // created, not state projected from the previously active session.
-              modelOverride: normalizedModelOverride,
-              llmModel: resolvedDefaultModel,
-              reasoningEffort: normalizedReasoningEffort,
-              // The RESOLVED native wrapper harness (e.g. "codex-native"), not the
-              // usually-null pickedHarness for a native agent — so the temp page
-              // adapter can re-derive the native model/effort/permission identity.
-              harness: smartRoutingHarnessSelected
-                ? null
-                : (selectedNativeHarness ?? pickedHarness ?? null),
-              costControlModeOverride: costControlOverride ?? null,
-              boundAgentId: effectiveAgentId,
-              // Name (not just id) so the in-session temp composer can evaluate
-              // routing eligibility (isCostRoutingSession needs a bound agent).
-              boundAgentName: agent?.display_name ?? agent?.name ?? null,
-              // Chosen host so temp routing's per-family gateway guard uses the
-              // real host (null for a sandbox create).
-              hostId: sandboxSelected ? null : selectedHostId,
-            },
-            submittedTaskTags,
-          );
+          // Keep the policy controls mounted until the server accepts a TB4
+          // route. An optimistic navigation would reset the cost policy on
+          // rejection and let the next click launch with different defaults.
+          localConv = tb4Policy
+            ? null
+            : beginLocalConversation(
+                initialPrompt,
+                files,
+                provisional,
+                localProject,
+                {
+                  // Seed the temp session with the NORMALIZED create identity so the
+                  // optimistic composer shows the model/effort/harness/routing being
+                  // created, not state projected from the previously active session.
+                  modelOverride: normalizedModelOverride,
+                  llmModel: resolvedDefaultModel,
+                  reasoningEffort: normalizedReasoningEffort,
+                  // The RESOLVED native wrapper harness (e.g. "codex-native"), not the
+                  // usually-null pickedHarness for a native agent — so the temp page
+                  // adapter can re-derive the native model/effort/permission identity.
+                  harness: smartRoutingHarnessSelected
+                    ? null
+                    : (selectedNativeHarness ?? pickedHarness ?? null),
+                  costControlModeOverride: costControlOverride ?? null,
+                  boundAgentId: effectiveAgentId,
+                  // Name (not just id) so the in-session temp composer can evaluate
+                  // routing eligibility (isCostRoutingSession needs a bound agent).
+                  boundAgentName: agent?.display_name ?? agent?.name ?? null,
+                  // Chosen host so temp routing's per-family gateway guard uses the
+                  // real host (null for a sandbox create).
+                  hostId: sandboxSelected ? null : selectedHostId,
+                },
+                submittedTaskTags,
+              );
           if (localConv !== null) navigate(sessionLocation(localConv.tempConvId));
         } catch {
           /* non-fatal: the response still opens the server session */
