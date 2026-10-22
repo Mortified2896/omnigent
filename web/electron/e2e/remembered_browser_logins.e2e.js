@@ -1,5 +1,5 @@
 "use strict";
-// Real Electron + macOS safeStorage restart check; no Google credentials,
+// Real Electron + OS safeStorage restart check; no Google credentials,
 // production cookies, Omnigent server, or paid provider are used.
 const fs = require("node:fs");
 const path = require("node:path");
@@ -13,7 +13,8 @@ if (!process.versions.electron) {
   async function run(phase) {
     const environment = { ...process.env };
     delete environment.ELECTRON_RUN_AS_NODE;
-    const child = spawn(electron, [__filename, directory, phase], {
+    const flags = process.env.OMNIGENT_BROWSER_TEST_NO_SANDBOX === "1" ? ["--no-sandbox"] : [];
+    const child = spawn(electron, [__filename, directory, phase, ...flags], {
       env: environment,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -39,6 +40,8 @@ if (!process.versions.electron) {
     try {
       await run("save");
       await run("restore");
+      await run("share");
+      await run("restore-shared");
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
@@ -117,7 +120,7 @@ if (!process.versions.electron) {
         "OS encryption must be available; never fall back to plaintext.",
       );
       const browser = await open("remembered-conversation");
-      if (phase === "save") {
+      if (phase === "save" || phase === "share") {
         await browser.session.cookies.set({
           url,
           name: "alibi_login_fixture",
@@ -126,8 +129,9 @@ if (!process.versions.electron) {
           sameSite: "lax",
         });
         browser.emit("context-menu", {}, { linkURL: "", selectionText: "" });
-        assert.equal(menu[0].checked, false);
-        await menu[0].click({ checked: true });
+        const item = phase === "share" ? menu[1] : menu[0];
+        assert.equal(item.checked, false);
+        await item.click({ checked: true });
         await store.flush();
         const saved = fs.readFileSync(
           path.join(
@@ -137,18 +141,44 @@ if (!process.versions.electron) {
           ),
         );
         assert.equal(saved.includes(Buffer.from("isolated-dummy-login")), false);
-        console.log('LOGIN_CHECK {"phase":"save","osEncryption":true,"plaintextAbsent":true}');
+        console.log(
+          `LOGIN_CHECK ${JSON.stringify({ phase, osEncryption: true, plaintextAbsent: true })}`,
+        );
       } else {
         assert.equal(await browser.executeJavaScript("document.body.innerText"), "Signed in");
         const isolated = await open("other-conversation");
-        assert.equal(await isolated.executeJavaScript("document.body.innerText"), "Signed out");
+        assert.equal(
+          await isolated.executeJavaScript("document.body.innerText"),
+          phase === "restore-shared" ? "Signed in" : "Signed out",
+        );
+        if (phase === "restore-shared") {
+          // Recipient logouts must not overwrite the reusable source snapshot.
+          await isolated.session.cookies.remove(url, "alibi_login_fixture");
+          await store.flush();
+          const next = await open("next-conversation");
+          assert.equal(await next.executeJavaScript("document.body.innerText"), "Signed in");
+          browser.emit("context-menu", {}, { linkURL: "", selectionText: "" });
+          assert.equal(menu[1].checked, true);
+          await menu[1].click({ checked: false });
+          const afterDisable = await open("after-disable");
+          assert.equal(
+            await afterDisable.executeJavaScript("document.body.innerText"),
+            "Signed out",
+          );
+        }
         browser.emit("context-menu", {}, { linkURL: "", selectionText: "" });
         assert.equal(menu[0].checked, true);
         await menu[0].click({ checked: false });
         await store.flush();
         assert.equal(fs.readdirSync(path.join(directory, "saved-logins")).length, 0);
         console.log(
-          'LOGIN_CHECK {"phase":"restore","restartRestored":true,"firstRequestAuthenticated":true,"otherConversationSignedOut":true,"forgetRemovedCredentials":true}',
+          `LOGIN_CHECK ${JSON.stringify({
+            phase,
+            restartRestored: true,
+            firstRequestAuthenticated: true,
+            otherConversationSignedIn: phase === "restore-shared",
+            forgetRemovedCredentials: true,
+          })}`,
         );
       }
       registry.closeAll("verification-finished");

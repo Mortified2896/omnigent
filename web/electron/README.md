@@ -478,24 +478,41 @@ sequenceDiagram
 ### Remembering website logins
 
 Right-click inside the embedded browser and enable **Remember logins after
-restarting Omnigent**. This saves that conversation's website cookies locally,
+restarting Omnigent** to save that conversation's website cookies locally,
 encrypted with Electron `safeStorage` and the operating system's key storage.
 Google sign-in and an application's own session cookie can both be restored;
 session cookies retain their original form and persistent cookies retain their
-expiry. The website can still expire or revoke a login. Other conversations,
-servers and the shell's own account remain isolated.
+expiry. The website can still expire or revoke a login.
 
-Saving is off by default. The native menu offers the option; browser
-pages cannot grant it and there is no browser-tool or renderer IPC for enabling it. Disabling the option deletes the encrypted
-cookie copy and stops further saves; the currently open session continues until
-closed. Logging out updates the saved copy. Browser cache, local storage and
-history remain temporary. Saved data is private application data and must never
-be committed, exported to the server, or logged. No plaintext fallback is used
-when OS encryption is unavailable.
+To reuse the current login in other chats, enable **Reuse saved logins in new
+chats on this server** in the same menu. This also enables remembering for the
+selected conversation. Newly opened chat browsers on that server receive a
+copy of its saved cookies before their first navigation, including after an app
+restart. Existing browser sessions and a chat's own remembered login take
+precedence. A page that stores its application session in local storage may
+still need its **Continue with Google** button; its saved Google cookies can
+avoid entering credentials again.
+
+Only the selected source conversation updates the reusable copy. Logging out
+or changing accounts in a recipient chat does not replace it. Turn reuse off
+and back on in a different chat to select that chat as the source. Turning
+reuse off stops imports into new chats; the source's own remembered copy and
+already open sessions remain. Turning off **Remember logins** in the source
+conversation deletes that encrypted copy and also disables reuse. Revoking a
+login at its website is separate from deleting a locally saved copy.
+
+Both settings are off by default and apply only on this desktop. Other servers,
+server mount paths and the shell's own account remain isolated. The native
+menu offers these options; browser pages cannot grant them, and there is no
+browser-tool or renderer IPC for enabling them. Browser cache, local storage
+and history remain temporary. Saved data is private application data and must
+never be committed, exported to the server, or logged. No plaintext fallback
+is used when OS encryption is unavailable (including Linux `basic_text`).
 
 Run `node e2e/remembered_browser_logins.e2e.js` from this package for the real
-Electron restart check, including first-request authentication, conversation
-isolation and forgetting the saved login. It uses an isolated dummy login.
+Electron restart check, including first-request authentication, default
+conversation isolation, optional reuse and forgetting the saved login. It uses
+an isolated dummy login and requires operating system encryption.
 
 ### Local network permission
 

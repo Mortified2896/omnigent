@@ -75,7 +75,10 @@ const { registerServerAwayWatch, AWAY_BANNER_DELAY_MS } = require("./away_banner
 const { createReturnBanner } = require("./return_banner");
 const { createReconnectOverlay } = require("./reconnect_overlay");
 const { createBrowserViewRegistry } = require("./browserViewRegistry");
-const { createRememberedBrowserLogins } = require("./rememberedBrowserLogins");
+const {
+  createRememberedBrowserLogins,
+  rememberedBrowserLoginOptions,
+} = require("./rememberedBrowserLogins");
 const { createBrowserViewBoundsController } = require("./browserViewBounds");
 const { registerBrowserIpc } = require("./browserIpc");
 const { arcaTarget, createArcaIdentityStore, isArcaAgentContext } = require("./arcaIdentity");
@@ -3948,45 +3951,11 @@ function createBrowserRegistryForWindow(win) {
     showContextMenu: (items) => {
       Menu.buildFromTemplate(items).popup({ window: win });
     },
-    prepareSession: async (viewId, browserSession) => {
-      const serverUrl = windows.get(win)?.serverUrl;
-      if (!serverUrl) return;
-      try {
-        await rememberedBrowserLogins.prepare(serverUrl, viewId, browserSession);
-      } catch {
-        dialog.showErrorBox(
-          "Saved browser login could not be restored",
-          "The browser will open signed out. Sign in again, then enable Remember logins to replace the saved session.",
-        );
-      }
-    },
-    additionalContextMenuItems: (entry) => {
-      const serverUrl = windows.get(win)?.serverUrl;
-      if (!serverUrl) return [];
-      return [
-        {
-          label: "Remember logins after restarting Omnigent",
-          type: "checkbox",
-          checked: rememberedBrowserLogins.isRemembered(serverUrl, entry.conversationId),
-          click: async (item) => {
-            try {
-              if (item.checked)
-                await rememberedBrowserLogins.remember(
-                  serverUrl,
-                  entry.conversationId,
-                  entry.view.webContents.session,
-                );
-              else await rememberedBrowserLogins.forget(serverUrl, entry.conversationId);
-            } catch {
-              dialog.showErrorBox(
-                "Browser login preference was not saved",
-                "Your current session stays open. The saved-login setting could not be changed.",
-              );
-            }
-          },
-        },
-      ];
-    },
+    ...rememberedBrowserLoginOptions({
+      store: rememberedBrowserLogins,
+      getServerUrl: () => windows.get(win)?.serverUrl,
+      showError: (title, message) => dialog.showErrorBox(title, message),
+    }),
   });
   win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) registry.setRecentSessionSwitchSupported(false);

@@ -25,6 +25,13 @@ function loginKey(serverUrl, viewId) {
     .digest("hex");
 }
 
+// A separate namespace keeps the server preference distinct from a chat ID.
+function sharedLoginKey(serverUrl) {
+  return createHash("sha256")
+    .update(`shared:${loginKey(serverUrl, "")}`)
+    .digest("hex");
+}
+
 function cookieDetails(cookie, now = Date.now() / 1000) {
   if (
     !cookie ||
@@ -63,9 +70,18 @@ function createRememberedBrowserLogins({
     sessions = new WeakMap();
   const root = () => (typeof directory === "function" ? directory() : directory);
   const enabled = (key) => loadSettings().remembered_browser_logins?.[key] === true;
+  function sharedSource(serverUrl) {
+    const source = loadSettings().shared_browser_logins?.[sharedLoginKey(serverUrl)];
+    if (typeof source !== "string") return null;
+    const key = loginKey(serverUrl, source);
+    return enabled(key) ? key : null;
+  }
   const file = (key) => path.join(root(), `${key}.bin`);
   function requireEncryption() {
-    if (!safeStorage.isEncryptionAvailable())
+    if (
+      !safeStorage.isEncryptionAvailable() ||
+      safeStorage.getSelectedStorageBackend?.() === "basic_text"
+    )
       throw new Error("System encryption is unavailable. Browser logins were not saved.");
   }
   function write(key, cookies) {
@@ -112,18 +128,25 @@ function createRememberedBrowserLogins({
   }
   async function prepare(serverUrl, viewId, session) {
     const key = loginKey(serverUrl, viewId);
-    if (!enabled(key)) return;
+    const source = enabled(key) ? key : sharedSource(serverUrl);
+    if (!source) return;
     const existing = sessions.get(session);
     if (existing) return existing.ready;
     const record = attach(key, session);
     record.active = false;
     record.ready = (async () => {
-      requireEncryption();
-      if (!fs.existsSync(file(key))) {
+      // Seed a fresh chat only. Never replace an existing live cookie jar with
+      // a different account, or let a recipient update the source snapshot.
+      if (source !== key && (await session.cookies.get({})).length) {
         record.active = true;
         return;
       }
-      const bytes = fs.readFileSync(file(key));
+      requireEncryption();
+      if (!fs.existsSync(file(source))) {
+        record.active = true;
+        return;
+      }
+      const bytes = fs.readFileSync(file(source));
       if (bytes.length > 2000000) throw new Error("Saved browser login is invalid.");
       const data = JSON.parse(safeStorage.decryptString(bytes));
       if (data.version !== 1 || !Array.isArray(data.cookies))
@@ -131,7 +154,7 @@ function createRememberedBrowserLogins({
       let stopped = false;
       await data.cookies.reduce(async (previous, cookie) => {
         await previous;
-        if (stopped || !enabled(key)) {
+        if (stopped || !enabled(source) || (source !== key && sharedSource(serverUrl) !== source)) {
           stopped = true;
           return;
         }
@@ -162,6 +185,9 @@ function createRememberedBrowserLogins({
     const key = loginKey(serverUrl, viewId),
       settings = loadSettings();
     delete settings.remembered_browser_logins?.[key];
+    const shared = sharedLoginKey(serverUrl);
+    if (settings.shared_browser_logins?.[shared] === owningConversation(viewId))
+      delete settings.shared_browser_logins[shared];
     saveSettings(settings);
     for (const record of records)
       if (record.key === key) {
@@ -170,6 +196,22 @@ function createRememberedBrowserLogins({
         await record.pending.catch(() => {});
       }
     fs.rmSync(file(key), { force: true });
+  }
+  async function share(serverUrl, viewId, session) {
+    // The selected chat is the single source of updates. Other chats receive
+    // a copy, so independent logouts/cookie changes cannot overwrite it.
+    await remember(serverUrl, viewId, session);
+    const settings = loadSettings();
+    settings.shared_browser_logins = {
+      ...settings.shared_browser_logins,
+      [sharedLoginKey(serverUrl)]: owningConversation(viewId),
+    };
+    saveSettings(settings);
+  }
+  async function unshare(serverUrl) {
+    const settings = loadSettings();
+    delete settings.shared_browser_logins?.[sharedLoginKey(serverUrl)];
+    saveSettings(settings);
   }
   async function flush() {
     await Promise.all(
@@ -184,7 +226,10 @@ function createRememberedBrowserLogins({
     prepare,
     remember,
     forget,
+    share,
+    unshare,
     flush,
+    isShared: (serverUrl) => sharedSource(serverUrl) !== null,
     isRemembered: (serverUrl, viewId) => enabled(loginKey(serverUrl, viewId)),
   };
 }
@@ -228,6 +273,23 @@ function rememberedBrowserLoginOptions({ store, getServerUrl, showError }) {
             }
           },
         },
+        {
+          label: "Reuse saved logins in new chats on this server",
+          type: "checkbox",
+          checked: store.isShared(serverUrl),
+          click: async (item) => {
+            try {
+              if (item.checked)
+                await store.share(serverUrl, entry.conversationId, entry.view.webContents.session);
+              else await store.unshare(serverUrl);
+            } catch {
+              showError(
+                "Browser login preference was not saved",
+                "Your current session stays open. Login reuse could not be changed.",
+              );
+            }
+          },
+        },
       ];
     },
   };
@@ -248,6 +310,7 @@ function recoveryUrl(serverUrl, currentUrl, requestedUrl) {
 module.exports = {
   createRememberedBrowserLogins,
   loginKey,
+  sharedLoginKey,
   cookieDetails,
   owningConversation,
   rememberedBrowserLoginOptions,
