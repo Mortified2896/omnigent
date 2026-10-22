@@ -8,6 +8,7 @@ candidates are accepted only inside complete ``CandidateProfile`` records.
 from __future__ import annotations
 
 import ast
+import json
 import re
 import subprocess
 import sys
@@ -40,6 +41,7 @@ MODEL_ID_RE = re.compile(
 TEXT_EXTENSIONS = {".json", ".toml", ".yaml", ".yml", ".sh"}
 SOURCE_EXTENSIONS = {".py", *TEXT_EXTENSIONS}
 GENERATED_PATHS = {Path("openapi.json")}
+BENCHMARK_EVIDENCE_PATH = "omnigent/server/tb4_routing/benchmarks.json"
 SKIP_PARTS = {
     ".git",
     ".mypy_cache",
@@ -329,6 +331,10 @@ def _scan_text(path: Path) -> list[Hit]:
 
 def scan(path: Path) -> list[Hit]:
     """Return hardcoded model hits in ``path``."""
+    if _repo_relative(path) == BENCHMARK_EVIDENCE_PATH and _is_benchmark_evidence(path):
+        # Dated measurements are data used to join the live catalogue. They
+        # never constitute configured route defaults or an executable model list.
+        return []
     if (
         not path.is_file()
         or path.suffix not in SOURCE_EXTENSIONS
@@ -342,6 +348,27 @@ def scan(path: Path) -> list[Hit]:
     if path.suffix in TEXT_EXTENSIONS:
         return _scan_text(path)
     return []
+
+
+def _is_benchmark_evidence(path: Path) -> bool:
+    try:
+        data = json.loads(path.read_text())
+        return (
+            data.get("benchmark") == "Terminal-Bench 4.0"
+            and bool(data.get("retrieved_at"))
+            and data.get("source_url", "").startswith("https://artificialanalysis.ai/")
+            and bool(data.get("models"))
+            and all(
+                isinstance(row.get("score"), (int, float))
+                and 0 <= row["score"] <= 100
+                and bool(row.get("effort"))
+                and row.get("source_url", "").startswith("https://artificialanalysis.ai/")
+                and not any(key in row for key in ("route", "provider", "default"))
+                for row in data["models"]
+            )
+        )
+    except (OSError, ValueError, AttributeError, TypeError):
+        return False
 
 
 def _iter_scannable_paths() -> list[Path]:

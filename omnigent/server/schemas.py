@@ -31,6 +31,7 @@ from omnigent.entities import (
     ConversationItem,
 )
 from omnigent.inner.native_attachments import reject_authored_framework_notices
+from omnigent.server.tb4_routing.service import TB4Policy
 
 # ── Shared ──────────────────────────────────────────────────────
 
@@ -1576,6 +1577,7 @@ class _SessionCreateRequestBase(BaseModel):
     subagent_routing_override: str | None = None
     harness_override: str | None = None
     smart_routing_message: str | None = None
+    tb4_policy: TB4Policy | None = None
 
     @model_validator(mode="after")
     def _check_git_requires_host(self) -> Self:

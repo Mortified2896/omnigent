@@ -68,13 +68,17 @@ def protect_recorded_policy(
     """Allow unrelated edits and reconnection without rewriting routing history."""
     new_labels = patch.get("labels")
     if isinstance(new_labels, dict):
-        for key in (POLICY_LABEL, PROPOSAL_LABEL, "omnigent.routing_backend"):
+        protected = [POLICY_LABEL, PROPOSAL_LABEL, "omnigent.routing_backend"]
+        protected.extend(k for k in new_labels if k.startswith("omnigent.tb4."))
+        if labels.get(POLICY_LABEL) == "tb4":
+            protected.append("omnigent.access_lane")
+        for key in protected:
             if key in new_labels and new_labels[key] != labels.get(key):
                 raise RoutingReviewError(
                     "recorded routing identity cannot be relabelled; start a new reviewed task",
                     status_code=409,
                 )
-    if labels.get(POLICY_LABEL) != "benchmark" and not labels.get(PROPOSAL_LABEL):
+    if labels.get(POLICY_LABEL) not in ("benchmark", "tb4") and not labels.get(PROPOSAL_LABEL):
         return
     for key in _ROUTE_FIELDS:
         if key in patch and patch[key] != current.get(key):
@@ -86,7 +90,7 @@ def protect_recorded_policy(
 
 def require_new_review(labels: Mapping[str, str | None], operation: str) -> None:
     """Keep an approval from being inherited by a different execution context."""
-    if labels.get(POLICY_LABEL) == "benchmark" or labels.get(PROPOSAL_LABEL):
+    if labels.get(POLICY_LABEL) in ("benchmark", "tb4") or labels.get(PROPOSAL_LABEL):
         from omnigent.errors import ErrorCode, OmnigentError
 
         raise OmnigentError(

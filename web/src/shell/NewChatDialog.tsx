@@ -1,4 +1,5 @@
 import { currentModelChoices } from "@/lib/currentModelChoices";
+import { TB4RoutingControl, type TB4Policy } from "@/components/TB4RoutingControl";
 import { CodexSubscriptionUsage } from "@/components/composer/CodexSubscriptionUsage";
 import { TaskTagsControls } from "@/components/composer/TaskTagsPicker";
 import { useTaskTags } from "@/hooks/useTaskTags";
@@ -2355,7 +2356,8 @@ export function NewChatLandingScreen() {
   const info = useServerInfo();
   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
-  const modelAdvisorEnabled = isFeatureEnabled(info, "model_advisor");
+  const [tb4Policy, setTB4Policy] = useState<TB4Policy | null>(null);
+  const modelAdvisorEnabled = isFeatureEnabled(info, "model_advisor") && tb4Policy === null;
   const advisorSubmitRef = useRef<AdvisorSubmitHandle>(null);
   // Portal target for the Advisor's compact secondary row below the composer
   // action controls (Harness | Model | Reasoning); the section itself mounts
@@ -5665,8 +5667,9 @@ export function NewChatLandingScreen() {
       // with the lit routing icon. Otherwise only send it when routing is
       // eligible for the effective harness, so a stale "on" can't ride along
       // invisibly with no control to clear it.
-      const costControlOverride =
-        pickedHarness === AUTO_HARNESS_ID || smartRoutingHarnessSelected
+      const costControlOverride = tb4Policy
+        ? "off"
+        : pickedHarness === AUTO_HARNESS_ID || smartRoutingHarnessSelected
           ? "on"
           : smartRoutingEligible
             ? (costControlMode ?? undefined)
@@ -5700,6 +5703,7 @@ export function NewChatLandingScreen() {
           ? currentFusionCombo(pickerFusion, fusionModelUid).modelUid
           : pickedModel;
       const normalizedModelOverride =
+        !tb4Policy &&
         !smartRoutingHarnessSelected &&
         !routingOwnsModel &&
         // devin's Model+Effort live under its own `devinMode` capability (not
@@ -5714,6 +5718,7 @@ export function NewChatLandingScreen() {
           ? submittedModel
           : null;
       const normalizedReasoningEffort =
+        !tb4Policy &&
         !smartRoutingHarnessSelected &&
         !routingOwnsModel &&
         (sandboxDefaultModelsEnabled ||
@@ -5965,8 +5970,18 @@ export function NewChatLandingScreen() {
             // Model + reasoning effort, persisted on the session row before
             // the runner launches. An unselected ("") knob is omitted so the
             // harness keeps its own configured/default value.
-            model_override: normalizedModelOverride ?? undefined,
-            reasoning_effort: normalizedReasoningEffort ?? undefined,
+            model_override: tb4Policy ? undefined : (normalizedModelOverride ?? undefined),
+            reasoning_effort: tb4Policy ? undefined : (normalizedReasoningEffort ?? undefined),
+            tb4_policy: tb4Policy
+              ? {
+                  ...tb4Policy,
+                  image_input: files.some((file) => file.type.startsWith("image/")),
+                  minimum_context_tokens: Math.max(
+                    tb4Policy.minimum_context_tokens,
+                    Math.ceil(initialPrompt.length / 3) + 16000,
+                  ),
+                }
+              : undefined,
             cost_control_mode_override: costControlOverride,
             // Top-level Smart Routing sends the same "auto" sentinel the bundle
             // path does; the server tells them apart by the bound agent being a
@@ -7254,7 +7269,12 @@ export function NewChatLandingScreen() {
                 ),
                 trailing: (
                   <>
-                    {showModelControl && (
+                    {tb4Policy && (
+                      <span className="text-xs text-muted-foreground">
+                        TB4 ≥ {tb4Policy.minimum_score}%
+                      </span>
+                    )}
+                    {showModelControl && !tb4Policy && (
                       <div className="relative flex w-20 min-[480px]:w-32 shrink-0 min-w-0 flex-col items-end justify-center [&>span]:w-full [&_button]:w-full">
                         <HarnessPicker
                           open={modelMenuOpen}
@@ -7290,6 +7310,7 @@ export function NewChatLandingScreen() {
                       </div>
                     )}
                     {pickerEffortOptions.length > 0 &&
+                      !tb4Policy &&
                       !routingOn &&
                       !smartRoutingHarnessSelected &&
                       !fusionSelected && (
@@ -7353,6 +7374,15 @@ export function NewChatLandingScreen() {
               }}
             />
           </form>
+          <TB4RoutingControl
+            available={
+              selectedNativeHarness === "codex-native" &&
+              !sandboxSelected &&
+              !smartRoutingHarnessSelected
+            }
+            value={tb4Policy}
+            onChange={setTB4Policy}
+          />
           {/* Advisor (Recommender) — mounts outside the composer card; its
           controls portal into the compact secondary row under the composer
           action controls, separated from the primary Harness | Model |

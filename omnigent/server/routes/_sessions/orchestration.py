@@ -10631,6 +10631,10 @@ async def _create_session_from_existing_agent(
         conversation_store=conversation_store,
     )
 
+    from omnigent.server.tb4_routing.service import bind_policy
+
+    body = await bind_policy(body, agent.name)
+
     if (
         body.labels.get("o3.routing.proposal_id")
         or body.labels.get("omnigent.routing_policy") == "benchmark"

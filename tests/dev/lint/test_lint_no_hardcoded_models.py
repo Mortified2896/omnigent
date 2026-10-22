@@ -267,3 +267,37 @@ def test_audit_observations_are_not_runtime_model_choices(
     executable = directory / "probe.py"
     executable.write_text('model = "gpt-5.5"')
     assert [hit.model for hit in scan(executable)] == ["gpt-5.5"]
+
+
+def test_only_provenanced_benchmark_data_is_exempt(tmp_path, monkeypatch):
+    import json
+
+    from dev.lint.lint_no_hardcoded_models import BENCHMARK_EVIDENCE_PATH
+
+    monkeypatch.chdir(tmp_path)
+    path = Path(BENCHMARK_EVIDENCE_PATH)
+    path.parent.mkdir(parents=True)
+    record = {
+        "model": "gpt-5.5",
+        "score": 25,
+        "effort": "high",
+        "source_url": "https://artificialanalysis.ai/models/example",
+    }
+    data = {
+        "benchmark": "Terminal-Bench 4.0",
+        "retrieved_at": "2026-10-22",
+        "source_url": "https://artificialanalysis.ai/evaluations/terminalbench-4-0",
+        "models": [record],
+    }
+    path.write_text(json.dumps(data))
+    assert scan(path) == []
+    outside = tmp_path / "defaults.json"
+    outside.write_text(json.dumps(data))
+    assert scan(outside)
+    record["default"] = True
+    path.write_text(json.dumps(data))
+    assert scan(path)
+    record.pop("default")
+    record["score"] = 101
+    path.write_text(json.dumps(data))
+    assert scan(path)

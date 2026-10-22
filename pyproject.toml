@@ -464,6 +464,7 @@ include = ["omnigent*"]
 # include UI assets in build, plus the static API-only landing page served
 # at "/" when no web UI bundle is present
 "omnigent.server" = ["static/web-ui/**/*", "static/api_only_landing.html"]
+"omnigent.server.tb4_routing" = ["benchmarks.json"]
 
 [tool.pytest.ini_options]
 # auto mode: async tests without @pytest.mark.asyncio() are auto-
