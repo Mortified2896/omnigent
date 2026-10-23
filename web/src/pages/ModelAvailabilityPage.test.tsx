@@ -87,6 +87,35 @@ function mount() {
 }
 
 describe("Model availability", () => {
+  it("shows the persisted spending scope when reopening a running batch", async () => {
+    running = true;
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ...data(),
+            run: {
+              ...data().run,
+              policy: {
+                cost_mode: "metered",
+                minimum_score: 40,
+                include_unscored: false,
+                retest: true,
+                max_input_usd_per_million: 2,
+                max_output_usd_per_million: 7,
+                estimated_budget_usd: 0.5,
+              },
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    mount();
+    await screen.findByRole("progressbar");
+    expect(screen.getByLabelText("Test spending")).toHaveValue("metered");
+    expect(screen.getByLabelText("Test spending")).toBeDisabled();
+    expect(screen.getByLabelText("Estimated batch budget ($)")).toHaveValue(0.5);
+  });
   it("shows ranked unknown and failed routes, and filters available routes", async () => {
     mount();
     await screen.findByText("Model A");

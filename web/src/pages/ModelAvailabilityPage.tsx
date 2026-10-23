@@ -59,6 +59,7 @@ interface Provider {
   }[];
 }
 interface Run {
+  policy?: Policy;
   id: string;
   status: string;
   total: number;
@@ -141,6 +142,7 @@ export function ModelAvailabilityPage() {
   });
   const data = overview.data;
   const running = data?.run?.status === "running";
+  const displayedPolicy = running && data?.run?.policy ? data.run.policy : policy;
   const planning = useQuery({
     queryKey: ["model-probe-plan", policy, data?.run?.completed],
     queryFn: () => api<Plan>("/plan", policy),
@@ -227,7 +229,7 @@ export function ModelAvailabilityPage() {
                 <select
                   aria-label="Test spending"
                   className={inputClass}
-                  value={policy.cost_mode}
+                  value={displayedPolicy.cost_mode}
                   onChange={(e) => update({ cost_mode: e.target.value as Policy["cost_mode"] })}
                 >
                   <option value="free">Free quota only</option>
@@ -243,7 +245,7 @@ export function ModelAvailabilityPage() {
                   min={0}
                   max={100}
                   className={inputClass}
-                  value={policy.minimum_score}
+                  value={displayedPolicy.minimum_score}
                   onChange={(e) => update({ minimum_score: Number(e.target.value) })}
                 />
               </label>
@@ -251,7 +253,7 @@ export function ModelAvailabilityPage() {
                 <label className="flex gap-2">
                   <input
                     type="checkbox"
-                    checked={policy.include_unscored}
+                    checked={displayedPolicy.include_unscored}
                     onChange={(e) => update({ include_unscored: e.target.checked })}
                   />
                   Include models without a TB4 score
@@ -259,13 +261,13 @@ export function ModelAvailabilityPage() {
                 <label className="flex gap-2">
                   <input
                     type="checkbox"
-                    checked={policy.retest}
+                    checked={displayedPolicy.retest}
                     onChange={(e) => update({ retest: e.target.checked })}
                   />
                   Retest models checked in the last 24 hours
                 </label>
               </div>
-              {policy.cost_mode === "metered" && (
+              {displayedPolicy.cost_mode === "metered" && (
                 <>
                   <label className="text-sm">
                     Max input $ / million
@@ -275,7 +277,7 @@ export function ModelAvailabilityPage() {
                       max={1000}
                       step={0.1}
                       className={inputClass}
-                      value={policy.max_input_usd_per_million}
+                      value={displayedPolicy.max_input_usd_per_million}
                       onChange={(e) =>
                         update({ max_input_usd_per_million: Number(e.target.value) })
                       }
@@ -289,7 +291,7 @@ export function ModelAvailabilityPage() {
                       max={10000}
                       step={0.1}
                       className={inputClass}
-                      value={policy.max_output_usd_per_million}
+                      value={displayedPolicy.max_output_usd_per_million}
                       onChange={(e) =>
                         update({ max_output_usd_per_million: Number(e.target.value) })
                       }
@@ -303,7 +305,7 @@ export function ModelAvailabilityPage() {
                       max={10}
                       step={0.1}
                       className={inputClass}
-                      value={policy.estimated_budget_usd}
+                      value={displayedPolicy.estimated_budget_usd}
                       onChange={(e) => update({ estimated_budget_usd: Number(e.target.value) })}
                     />
                   </label>
