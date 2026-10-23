@@ -21,6 +21,7 @@ const base = {
   last_test: null,
 };
 let running = false;
+let legacy = false;
 const data = () => ({
   rows: [
     { ...base, name: "Model A", route: "provider/model-a", score: 50, status: "available" },
@@ -65,7 +66,7 @@ const data = () => ({
         total: 3,
         completed: 1,
         available: 1,
-        responding: 2,
+        responding: legacy ? undefined : 2,
         current: ["provider/model-b"],
         skipped: {},
         estimated_probe_usd: 0,
@@ -75,6 +76,7 @@ const data = () => ({
 
 beforeEach(() => {
   running = false;
+  legacy = false;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url) => {
     const path = String(url);
@@ -148,5 +150,14 @@ describe("Model availability", () => {
     mount();
     expect(await screen.findByRole("alert")).toHaveTextContent("Gateway unavailable");
     expect(screen.queryByText("Verified with tools")).toBeNull();
+  });
+  it("does not turn a legacy tool-only scan into a text measurement", async () => {
+    running = true;
+    legacy = true;
+    mount();
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("text not measured (legacy scan)");
+    expect(status).not.toHaveTextContent("1 text responses");
+    expect(status).toHaveTextContent("1 tool checks passed");
   });
 });

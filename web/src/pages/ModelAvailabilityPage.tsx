@@ -129,8 +129,10 @@ export function ModelAvailabilityPage() {
           <p role="status" className="mt-3 text-sm">
             {running ? "OmniRoute is testing" : "Last OmniRoute scan: " + data.run.status} ·{" "}
             {data.run.completed}/{data.run.total} processed ·{" "}
-            {data.run.responding ?? data.run.available} text responses · {data.run.available} tool
-            checks passed{data.run.responding === undefined ? " (legacy scan)" : ""}
+            {data.run.responding === undefined
+              ? "text not measured (legacy scan)"
+              : `${data.run.responding} text responses`}{" "}
+            · {data.run.available} tool checks passed
           </p>
         )}
       </div>
