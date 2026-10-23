@@ -17,6 +17,8 @@ class ProbePolicy(BaseModel):
     max_output_usd_per_million: float = Field(default=5, ge=0, le=10000)
     estimated_budget_usd: float = Field(default=1, gt=0, le=10)
     retest: bool = False
+    check_tools: bool = False
+    timeout_seconds: int = Field(default=60, ge=10, le=180)
 
 
 async def gateway_request(method: str, path: str = "", body: dict | None = None) -> dict:

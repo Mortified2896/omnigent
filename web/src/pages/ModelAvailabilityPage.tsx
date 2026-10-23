@@ -17,11 +17,17 @@ interface Row {
   account_ready: boolean;
   context_tokens: number | null;
   estimated_task_usd: number | null;
-  last_test: { checked_at: number; message: string } | null;
+  last_test: { checked_at: number; message: string; tools_status?: string } | null;
 }
 interface Overview {
   rows: Row[];
-  run: { status: string; completed: number; total: number; available: number } | null;
+  run: {
+    status: string;
+    completed: number;
+    total: number;
+    available: number;
+    responding?: number;
+  } | null;
   harness_observations: {
     route: string;
     effort: string;
@@ -56,7 +62,7 @@ export function ModelAvailabilityPage() {
   const client = useQueryClient();
   const [search, setSearch] = useState("");
   const [floor, setFloor] = useState(0);
-  const [cost, setCost] = useState("included");
+  const [cost, setCost] = useState("free");
   const [showUnverified, setShowUnverified] = useState(false);
   const [limit, setLimit] = useState(50);
   const query = useQuery({
@@ -67,10 +73,11 @@ export function ModelAvailabilityPage() {
   const refresh = useMutation({
     mutationFn: () =>
       api("/test", {
-        cost_mode: "included",
+        cost_mode: "free",
         minimum_score: 0,
         include_unscored: true,
         retest: true,
+        check_tools: false,
       }),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: ["model-availability"] });
@@ -81,7 +88,7 @@ export function ModelAvailabilityPage() {
   const running = data?.run?.status === "running";
   const rows = (data?.rows ?? []).filter(
     (r) =>
-      (showUnverified || (r.status === "available" && r.account_ready)) &&
+      (showUnverified || (["available", "responding"].includes(r.status) && r.account_ready)) &&
       `${r.name} ${r.route}`.toLowerCase().includes(search.toLowerCase()) &&
       (floor === 0 || (r.score !== null && r.score >= floor)) &&
       (cost === "all" ||
@@ -94,8 +101,8 @@ export function ModelAvailabilityPage() {
         <div>
           <h1 className="text-2xl font-semibold">Available models</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Shared OmniRoute results, highest TB4 first. Generic tool checks and observed harness
-            turns are separate evidence.
+            Shared OmniRoute results, highest TB4 first. Text responses, optional tool checks and
+            observed harness turns are separate evidence.
           </p>
         </div>
         <Link to="/" className="text-sm underline">
@@ -115,14 +122,15 @@ export function ModelAvailabilityPage() {
           </a>
         </div>
         <p className="mt-3 text-xs text-muted-foreground">
-          Refresh runs the shared free + included scan. Configure metered scans, inspect failures,
-          or stop a scan in OmniRoute.
+          Refresh tests text responses on free routes without requiring tools. Configure other
+          spending scopes and optional tool checks, inspect failures, or stop a scan in OmniRoute.
         </p>
         {data?.run && (
           <p role="status" className="mt-3 text-sm">
             {running ? "OmniRoute is testing" : "Last OmniRoute scan: " + data.run.status} ·{" "}
-            {data.run.completed}/{data.run.total} processed · {data.run.available} tool checks
-            passed
+            {data.run.completed}/{data.run.total} processed ·{" "}
+            {data.run.responding ?? data.run.available} text responses · {data.run.available} tool
+            checks passed{data.run.responding === undefined ? " (legacy scan)" : ""}
           </p>
         )}
       </div>
@@ -220,9 +228,18 @@ export function ModelAvailabilityPage() {
               </div>
               <div>
                 <p className="text-sm">
-                  {row.status === "available" ? "Generic tool check passed" : row.status}
+                  {row.status === "available"
+                    ? "Text and tool check passed"
+                    : row.status === "responding"
+                      ? "Text response passed"
+                      : row.status}
                   {!row.account_ready ? " · account unavailable" : ""}
                 </p>
+                {row.last_test?.tools_status && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Tool check: {row.last_test.tools_status.replaceAll("_", " ")}
+                  </p>
+                )}
                 <p className="mt-1 text-xs text-muted-foreground">
                   Checked {when(row.last_test?.checked_at)}
                 </p>

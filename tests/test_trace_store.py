@@ -20,14 +20,26 @@ def test_probe_history_ingests_once_without_payloads(tmp_path):
         "latency_ms": 40,
         "prompt": "secret user content",
     }
+    outcomes = [
+        outcome,
+        {**outcome, "run_id": "run-two", "status": "failed"},
+        {
+            **outcome,
+            "run_id": "run-text",
+            "status": "responding",
+            "text_ok": True,
+            "text_status": "passed",
+            "text_http_status": 200,
+            "tools_ok": False,
+            "responses_ok": False,
+            "tools_status": "not_requested",
+        },
+    ]
     with sqlite3.connect(probe_path) as db:
         db.execute("CREATE TABLE history (data TEXT)")
         db.executemany(
             "INSERT INTO history VALUES (?)",
-            [
-                (json.dumps(r),)
-                for r in [outcome, {**outcome, "run_id": "run-two", "status": "failed"}]
-            ],
+            [(json.dumps(r),) for r in outcomes],
         )
     store = Store(tmp_path / "analysis.sqlite")
     spec = {"sources": [{"id": "probes", "kind": "model_probe", "path": str(probe_path)}]}
@@ -38,7 +50,7 @@ def test_probe_history_ingests_once_without_payloads(tmp_path):
         json.dumps(
             {
                 "version": 1,
-                "history": [outcome, {**outcome, "run_id": "run-two", "status": "failed"}],
+                "history": outcomes,
             }
         )
     )
@@ -50,10 +62,14 @@ def test_probe_history_ingests_once_without_payloads(tmp_path):
         == []
     )
     events = [dict(r) for r in store.db.execute("SELECT * FROM events")]
-    assert len(events) == 2
-    assert {r["status"] for r in events} == {"available", "failed"}
+    assert len(events) == 3
+    assert {r["status"] for r in events} == {"available", "failed", "responding"}
     assert "secret user content" not in json.dumps(events)
     assert all(json.loads(r["metadata"])["scoring_eligible"] is False for r in events)
+    text_result = next(json.loads(r["metadata"]) for r in events if r["status"] == "responding")
+    assert text_result["text_ok"] is True
+    assert text_result["tools_ok"] is False
+    assert text_result["tools_status"] == "not_requested"
 
 
 def test_harness_projection_requires_observed_identity_and_matching_turn(tmp_path):

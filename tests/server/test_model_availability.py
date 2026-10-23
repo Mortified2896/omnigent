@@ -56,6 +56,10 @@ async def test_shared_gateway_delegation_and_protocol_failure(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_availability_auth_admin_csrf_and_feature_gate(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from omnigent.server.tb4_routing import routes
+
     monkeypatch.setenv("OMNIGENT_LOCAL_SINGLE_USER", "1")
     monkeypatch.setenv("OMNIGENT_TB4_ROUTING_ENABLED", "1")
     app = FastAPI()
@@ -95,6 +99,28 @@ async def test_availability_auth_admin_csrf_and_feature_gate(monkeypatch):
                 headers={**auth, "Content-Type": "text/plain"},
             )
         ).status_code == 415
+        delegated = AsyncMock(return_value={"targets": 41})
+        monkeypatch.setattr(routes, "gateway_request", delegated)
+        for check_tools in (False, True):
+            response = await client.post(
+                "/v1/routing/availability/plan",
+                json={"cost_mode": "free", "check_tools": check_tools, "timeout_seconds": 180},
+                headers=auth,
+            )
+            assert response.status_code == 200
+            body = delegated.call_args.args[2]
+            assert body["check_tools"] is check_tools
+            assert body["timeout_seconds"] == 180
+            assert body["cost_mode"] == "free"
+        response = await client.post("/v1/routing/availability/plan", json={}, headers=auth)
+        assert response.status_code == 200
+        assert delegated.call_args.args[2]["check_tools"] is False
+        assert delegated.call_args.args[2]["timeout_seconds"] == 60
+        assert (
+            await client.post(
+                "/v1/routing/availability/plan", json={"timeout_seconds": 181}, headers=auth
+            )
+        ).status_code == 422
         monkeypatch.setenv("OMNIGENT_TB4_ROUTING_ENABLED", "0")
         assert (
             await client.post("/v1/routing/availability/test", json={}, headers=auth)

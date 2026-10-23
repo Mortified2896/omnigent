@@ -26,6 +26,22 @@ const data = () => ({
     { ...base, name: "Model A", route: "provider/model-a", score: 50, status: "available" },
     { ...base, name: "Model B", route: "provider/model-b", score: 20, status: "failed" },
     { ...base, name: "Unknown score", route: "provider/unknown", score: null, status: "untested" },
+    {
+      ...base,
+      name: "Text only",
+      route: "provider/text",
+      score: null,
+      status: "responding",
+      last_test: { checked_at: 100, message: "Text passed", tools_status: "failed" },
+    },
+    {
+      ...base,
+      name: "Subscription",
+      route: "provider/included",
+      cost_class: "subscription",
+      score: null,
+      status: "available",
+    },
   ],
   providers: [
     {
@@ -49,6 +65,7 @@ const data = () => ({
         total: 3,
         completed: 1,
         available: 1,
+        responding: 2,
         current: ["provider/model-b"],
         skipped: {},
         estimated_probe_usd: 0,
@@ -90,19 +107,23 @@ describe("Model availability", () => {
   it("shows usable routes and keeps detailed scan controls in OmniRoute", async () => {
     mount();
     await screen.findByText("Model A");
-    expect(screen.getAllByTestId("availability-row")).toHaveLength(1);
+    expect(screen.getAllByTestId("availability-row")).toHaveLength(2);
     expect(screen.queryByText("Model B")).toBeNull();
+    expect(screen.getByText("Text only")).toBeInTheDocument();
+    expect(screen.getByText("Text response passed")).toBeInTheDocument();
+    expect(screen.getByText("Tool check: failed")).toBeInTheDocument();
+    expect(screen.queryByText("Subscription")).toBeNull();
     expect(screen.getByRole("link", { name: /Tests, providers and quotas/ })).toHaveAttribute(
       "href",
       "https://sg-apps.taile0361b.ts.net:9443/availability",
     );
-    expect(screen.getByText("Harness: no observed client turn")).toBeInTheDocument();
+    expect(screen.getAllByText("Harness: no observed client turn")).toHaveLength(2);
     fireEvent.click(screen.getByLabelText("Show unverified and failed routes"));
-    expect(screen.getAllByTestId("availability-row")).toHaveLength(3);
+    expect(screen.getAllByTestId("availability-row")).toHaveLength(4);
     fireEvent.change(screen.getByLabelText("Minimum TB4 score"), { target: { value: "30" } });
     expect(screen.getAllByTestId("availability-row")).toHaveLength(1);
   });
-  it("starts the shared included scan and shows its progress", async () => {
+  it("starts a free text scan without tool checks and shows separate progress", async () => {
     mount();
     const button = await screen.findByRole("button", { name: "Refresh availability" });
     await waitFor(() => expect(button).toBeEnabled());
@@ -110,11 +131,13 @@ describe("Model availability", () => {
     await screen.findByText(/OmniRoute is testing/);
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/test"));
     expect(JSON.parse(String(call?.[1]?.body))).toEqual({
-      cost_mode: "included",
+      cost_mode: "free",
       minimum_score: 0,
       include_unscored: true,
       retest: true,
+      check_tools: false,
     });
+    expect(screen.getByRole("status")).toHaveTextContent("2 text responses · 1 tool checks passed");
     expect(button).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Stop testing" })).toBeNull();
   });
