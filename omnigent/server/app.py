@@ -3500,7 +3500,9 @@ def create_app(
         )
     from omnigent.server.tb4_routing.routes import create_tb4_router
 
-    app.include_router(create_tb4_router(auth_provider), prefix="/v1", tags=["routing"])
+    app.include_router(
+        create_tb4_router(auth_provider, permission_store), prefix="/v1", tags=["routing"]
+    )
     app.include_router(
         create_extensions_router(
             resolved_extension_state,

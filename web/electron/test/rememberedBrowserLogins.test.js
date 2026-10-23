@@ -155,16 +155,18 @@ test("explicit reuse seeds new chats after restart, with a single source and ser
   const next = browserSession();
   await restarted.prepare(server, "c", next);
   assert.equal((await next.cookies.get({}))[0].value, cookie.value);
-  for (const other of [
-    "https://other.example/one",
-    "https://server.example/two",
-    "https://server.example:444/one",
-  ]) {
-    const isolated = browserSession();
-    await restarted.prepare(other, "a", isolated);
-    assert.deepEqual(await isolated.cookies.get({}), []);
-    assert.equal(restarted.isShared(other), false);
-  }
+  await Promise.all(
+    [
+      "https://other.example/one",
+      "https://server.example/two",
+      "https://server.example:444/one",
+    ].map(async (other) => {
+      const isolated = browserSession();
+      await restarted.prepare(other, "a", isolated);
+      assert.deepEqual(await isolated.cookies.get({}), []);
+      assert.equal(restarted.isShared(other), false);
+    }),
+  );
   // Only the selected source's updates affect the reusable saved login.
   source.cookies.replace([]);
   await store.flush();

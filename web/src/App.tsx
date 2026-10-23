@@ -62,6 +62,12 @@ const UsagePage = withPageView(
   "usage",
   lazy(() => import("@/pages/UsagePage").then((m) => ({ default: m.UsagePage }))),
 );
+const ModelAvailabilityPage = withPageView(
+  "model_availability",
+  lazy(() =>
+    import("@/pages/ModelAvailabilityPage").then((m) => ({ default: m.ModelAvailabilityPage })),
+  ),
+);
 const SettingsPage = lazy(() =>
   import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
@@ -186,6 +192,7 @@ function AppRoutes({ basename }: AppProps) {
             }
           />
           <Route path={`${prefix}/tasks`} element={<TasksPage />} />
+          <Route path={`${prefix}/models`} element={<ModelAvailabilityPage />} />
           <Route
             path={`${prefix}/usage`}
             element={

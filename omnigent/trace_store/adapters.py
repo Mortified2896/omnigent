@@ -581,6 +581,41 @@ def gateway_record(store: Store, source: str, row: dict):
     )
 
 
+def model_probe(store: Store, source: str, path: Path):
+    with source_db(path) as db:
+        for record in db.execute("SELECT data FROM history"):
+            row = json.loads(record[0])
+            store.event(
+                source,
+                digest([row["run_id"], row["route"], row["effort"]]),
+                "model_availability_probe",
+                timestamp=row["checked_at"],
+                model=row["route"],
+                effort=row["effort"],
+                status=row["status"],
+                duration_ms=row.get("latency_ms"),
+                estimated_cost_usd=row.get("estimated_cost_usd"),
+                cost_basis="synthetic_probe_budget_estimate",
+                metadata={
+                    "is_test": True,
+                    "scoring_eligible": False,
+                    **{
+                        k: row.get(k)
+                        for k in (
+                            "run_id",
+                            "score",
+                            "cost_class",
+                            "http_status",
+                            "served_model",
+                            "responses_ok",
+                            "tools_ok",
+                        )
+                    },
+                },
+            )
+    return {}
+
+
 ADAPTERS = {
     "omnigent": omnigent,
     "codex_state": codex_state,
@@ -592,6 +627,7 @@ ADAPTERS = {
     "gateway": lambda s, n, p: jsonl(s, n, p, gateway_record),
     "zcode_io": lambda s, n, p: jsonl(s, n, p, zcode_io_record),
     "routing_receipt": routing_receipt,
+    "model_probe": model_probe,
 }
 
 

@@ -7,6 +7,35 @@ from omnigent.trace_store.adapters import otlp_record
 from omnigent.trace_store.store import Store, scrub, source_db
 
 
+def test_probe_history_ingests_once_without_payloads(tmp_path):
+    from omnigent.server.tb4_routing.availability_store import ProbeStore
+
+    probes = ProbeStore(tmp_path / "probes")
+    outcome = {
+        "run_id": "run-one",
+        "route": "provider/test-model",
+        "effort": "default",
+        "checked_at": time.time(),
+        "status": "available",
+        "tools_ok": True,
+        "responses_ok": True,
+        "latency_ms": 40,
+        "prompt": "secret user content",
+    }
+    probes.result(outcome)
+    probes.result({**outcome, "run_id": "run-two", "status": "failed"})
+    assert len(probes.results()) == 1
+    store = Store(tmp_path / "analysis.sqlite")
+    spec = {"sources": [{"id": "probes", "kind": "model_probe", "path": str(probes.path)}]}
+    assert collect(store, spec) == []
+    assert collect(store, spec) == []
+    events = [dict(r) for r in store.db.execute("SELECT * FROM events")]
+    assert len(events) == 2
+    assert {r["status"] for r in events} == {"available", "failed"}
+    assert "secret user content" not in json.dumps(events)
+    assert all(json.loads(r["metadata"])["scoring_eligible"] is False for r in events)
+
+
 def log(name="codex.api_request", **attributes):
     attributes = {
         "event.name": name,

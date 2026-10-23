@@ -18,6 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.o3_routing_review.omniroute import OmniRouteClient, OmniRouteError
 
+from .availability_store import recorded_results
+
 
 class TB4Policy(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -44,6 +46,7 @@ def readiness() -> dict:
     data = json.loads(Path(path).read_text())
     if not 0 <= time.time() - data.get("observed_at", 0) <= 1200:
         return {}  # Stale account/entitlement evidence must not authorize a new route.
+    data["probes"] = list(recorded_results().values())
     return data
 
 
@@ -88,6 +91,7 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
     eligible = []
     providers = evidence.get("providers", {})
     routes = evidence.get("routes", {})
+    probes = {(p["route"], p["effort"]): p for p in evidence.get("probes", [])}
     for row in catalogue:
         route = row.get("id", "")
         provider, separator, model = route.partition("/")
@@ -114,17 +118,6 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
         if policy.image_input and capabilities.get("vision") is not True:
             excluded["Image input unavailable"] += 1
             continue
-        recent = routes.get(route, {})
-        if (rate(recent.get("status")) or 0) >= 400:
-            excluded["Latest observed request failed"] += 1
-            continue
-        if (
-            rate(recent.get("status")) != 200
-            or recent.get("endpoint") != "/v1/responses"
-            or not 0 <= time.time() - (rate(recent.get("observed_at")) or 0) <= 86400
-        ):
-            excluded["No verified recent Responses success"] += 1
-            continue
         # An explicit :free route is a public zero-price offering. Account quotas
         # remain limits, not permission to spill to a paid model.
         cost_class = "free" if model.endswith(":free") else account.get("cost_class", "unknown")
@@ -134,6 +127,8 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
             cost_class = (
                 "metered" if input_rate is not None and output_rate is not None else "unknown"
             )
+            if input_rate == 0 and output_rate == 0:
+                cost_class = "free"
         allowed_cost = cost_class == "free" or (
             policy.cost_mode != "free" and cost_class == "subscription"
         )
@@ -160,6 +155,28 @@ def evaluate(policy: TB4Policy, catalogue: list[dict], evidence: dict, registry:
             excluded["Below TB4 floor or effort unavailable"] += 1
             continue
         best = max(matching, key=lambda r: r["score"])
+        recent = routes.get(route, {})
+        probe = probes.get((route, best["effort"]))
+        if probe and 0 <= time.time() - probe["checked_at"] <= 86400:
+            if probe["status"] != "available":
+                excluded["Latest compatibility test did not pass"] += 1
+                continue
+            if probe["checked_at"] >= (rate(recent.get("observed_at")) or 0):
+                recent = {
+                    "status": 200,
+                    "endpoint": "/v1/responses",
+                    "observed_at": probe["checked_at"],
+                }
+        if (rate(recent.get("status")) or 0) >= 400:
+            excluded["Latest observed request failed"] += 1
+            continue
+        if (
+            rate(recent.get("status")) != 200
+            or recent.get("endpoint") != "/v1/responses"
+            or not 0 <= time.time() - (rate(recent.get("observed_at")) or 0) <= 86400
+        ):
+            excluded["No verified recent Responses success"] += 1
+            continue
         eligible.append(
             {
                 "route": route,

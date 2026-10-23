@@ -99,6 +99,9 @@ export function TB4RoutingControl({
         Choose by TB4 score and cost
         <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Preview</span>
       </label>
+      <a href="/models" className="mt-3 inline-block text-sm font-medium underline">
+        Model availability · test all providers
+      </a>
       {value && (
         <div className="mt-4 space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">

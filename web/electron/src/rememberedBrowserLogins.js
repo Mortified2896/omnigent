@@ -187,7 +187,7 @@ function createRememberedBrowserLogins({
     delete settings.remembered_browser_logins?.[key];
     const shared = sharedLoginKey(serverUrl);
     if (settings.shared_browser_logins?.[shared] === owningConversation(viewId))
-      delete settings.shared_browser_logins[shared];
+      Reflect.deleteProperty(settings.shared_browser_logins, shared);
     saveSettings(settings);
     for (const record of records)
       if (record.key === key) {

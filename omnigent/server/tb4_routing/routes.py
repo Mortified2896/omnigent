@@ -1,16 +1,62 @@
 """Authenticated, task-free preview of the policy's live candidate set."""
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Request
 
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._content_type import require_json_content_type
 from omnigent.server.routes._origin import require_trusted_origin
 
+from .availability import AvailabilityService, ProbePolicy, plan
 from .service import TB4Policy, catalogue, enabled
 
 
-def create_tb4_router(auth_provider=None):
+def create_tb4_router(auth_provider=None, permission_store=None):
     router = APIRouter()
+    availability = AvailabilityService()
+
+    async def operator(request):
+        user = require_user(request, auth_provider)
+        if permission_store is not None and (
+            user is None or not await asyncio.to_thread(permission_store.is_admin, user)
+        ):
+            raise OmnigentError(
+                "Model availability is available to administrators", code=ErrorCode.FORBIDDEN
+            )
+        if not enabled():
+            raise OmnigentError("Model availability is not enabled", code=ErrorCode.NOT_FOUND)
+        return user
+
+    @router.get("/routing/availability")
+    async def overview(request: Request):
+        await operator(request)
+        return await availability.overview()
+
+    guards = [Depends(require_json_content_type), Depends(require_trusted_origin)]
+
+    @router.post("/routing/availability/refresh", dependencies=guards)
+    async def refresh(request: Request):
+        await operator(request)
+        return await availability.overview(refresh=True)
+
+    @router.post("/routing/availability/plan", dependencies=guards)
+    async def test_plan(request: Request, policy: ProbePolicy):
+        await operator(request)
+        data = await availability.overview()
+        targets, skipped, estimate = plan(data["rows"], policy)
+        return {"targets": len(targets), "skipped": skipped, "estimated_probe_usd": estimate}
+
+    @router.post("/routing/availability/test", dependencies=guards)
+    async def test_models(request: Request, policy: ProbePolicy):
+        user = await operator(request)
+        return await availability.start(policy, user)
+
+    @router.post("/routing/availability/cancel", dependencies=guards)
+    async def cancel_test(request: Request):
+        await operator(request)
+        return await availability.cancel()
 
     @router.get("/routing/tb4")
     async def status(request: Request):

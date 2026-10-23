@@ -1,4 +1,5 @@
 import { ResponseTiming } from "@/components/composer/ResponseTiming";
+import { ModelAvailabilityNav } from "@/shell/ModelAvailabilityNav";
 import { filterSessionScope } from "@/lib/sessionVisibility";
 import { getCurrentUserId } from "@/lib/identity";
 import { PinCapacityContext, SidebarConfigContext } from "@/lib/sidebarConfig";
@@ -1321,6 +1322,7 @@ function SidebarImpl({
                 activePageId={activeExtensionPageId}
                 onNavigate={onNavClick}
               />
+              <ModelAvailabilityNav onNavigate={onNavClick} />
               {usagePageEnabled && (
                 <Button
                   asChild
