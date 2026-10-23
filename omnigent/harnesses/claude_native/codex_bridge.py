@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import copy
 import hashlib
 import hmac
 import json
@@ -126,6 +127,7 @@ class Turn:
     recorded: dict = field(default_factory=dict)
     pending: dict = field(default_factory=dict)
     touched: float = field(default_factory=time.monotonic)
+    turn_id: str = ""
 
 
 def digest(value: object) -> str:
@@ -242,7 +244,7 @@ class Bridge:
         with contextlib.suppress(Exception):
             await turn.rpc.request(
                 "turn/interrupt",
-                {"threadId": turn.thread, "turnId": turn.pending.get("turnId", "")},
+                {"threadId": turn.thread, "turnId": turn.pending.get("turnId") or turn.turn_id},
             )
         await turn.rpc.close()
 
@@ -331,14 +333,37 @@ class Bridge:
             thread = result["thread"]["id"]
             # Preserve roles, system instructions and content blocks in the initial
             # request. Subsequent tool results resume this same native turn.
+            client_name = self.config.get("client_name", "Claude Code")
+            prompt_messages = copy.deepcopy(messages)
+            images = []
+            if self.config.get("allow_images", False):
+                for message in prompt_messages:
+                    blocks = message.get("content", [])
+                    if not isinstance(blocks, list):
+                        continue
+                    for index, block in enumerate(blocks):
+                        if block.get("type") == "image":
+                            source = block["source"]
+                            url = source.get("url")
+                            if not url and source.get("type") == "base64":
+                                url = "data:" + source["media_type"] + ";base64," + source["data"]
+                            if not isinstance(url, str) or not url.startswith(
+                                ("https://", "data:image/")
+                            ):
+                                raise ValueError("Unsupported image source")
+                            images.append({"type": "image", "url": url})
+                            blocks[index] = {
+                                "type": "text",
+                                "text": f"[Image attachment {len(images)}]",
+                            }
             prompt = (
-                "You are running inside Claude Code. Use ONLY its provided function tools "
+                f"You are running inside {client_name}. Use ONLY its provided function tools "
                 "for actions. Do not use Codex built-in tools. Follow these system "
                 "instructions and conversation:\n"
                 + json.dumps(
                     {
                         "system": body.get("system", []),
-                        "messages": messages,
+                        "messages": prompt_messages,
                         "tool_names": tool_names,
                     },
                     ensure_ascii=False,
@@ -346,15 +371,16 @@ class Bridge:
             )
             turn = Turn(rpc, body["model"], history_digest(messages), tools, effort, thread)
             turn.tool_names = tool_names
-            await rpc.request(
+            started = await rpc.request(
                 "turn/start",
                 {
                     "threadId": thread,
                     "model": turn.model,
                     "effort": effort,
-                    "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                    "input": [{"type": "text", "text": prompt, "text_elements": []}, *images],
                 },
             )
+            turn.turn_id = (started.get("turn") or {}).get("id", "")
             return turn
         except Exception:
             await rpc.close()
