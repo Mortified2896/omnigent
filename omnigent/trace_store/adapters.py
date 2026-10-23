@@ -112,6 +112,9 @@ def omnigent(store: Store, source: str, path: Path):
                                 "provider",
                                 "harness",
                                 "reasoning_effort",
+                                "model_status",
+                                "model_source",
+                                "access_lane",
                             )
                         },
                     )
@@ -584,36 +587,49 @@ def gateway_record(store: Store, source: str, row: dict):
 def model_probe(store: Store, source: str, path: Path):
     with source_db(path) as db:
         for record in db.execute("SELECT data FROM history"):
-            row = json.loads(record[0])
-            store.event(
-                source,
-                digest([row["run_id"], row["route"], row["effort"]]),
-                "model_availability_probe",
-                timestamp=row["checked_at"],
-                model=row["route"],
-                effort=row["effort"],
-                status=row["status"],
-                duration_ms=row.get("latency_ms"),
-                estimated_cost_usd=row.get("estimated_cost_usd"),
-                cost_basis="synthetic_probe_budget_estimate",
-                metadata={
-                    "is_test": True,
-                    "scoring_eligible": False,
-                    **{
-                        k: row.get(k)
-                        for k in (
-                            "run_id",
-                            "score",
-                            "cost_class",
-                            "http_status",
-                            "served_model",
-                            "responses_ok",
-                            "tools_ok",
-                        )
-                    },
-                },
-            )
+            model_probe_record(store, source, json.loads(record[0]))
     return {}
+
+
+def model_probe_snapshot(store: Store, source: str, path: Path):
+    data = json.loads(path.read_text())
+    if data.get("version") != 1 or not isinstance(data.get("history"), list):
+        raise ValueError("Invalid availability snapshot")
+    for row in data["history"]:
+        model_probe_record(store, source, row)
+    return {}
+
+
+def model_probe_record(store: Store, source: str, row: dict):
+    store.event(
+        source,
+        digest([row["run_id"], row["route"], row["effort"]]),
+        "model_availability_probe",
+        timestamp=row["checked_at"],
+        model=row["route"],
+        effort=row["effort"],
+        status=row["status"],
+        duration_ms=row.get("latency_ms"),
+        estimated_cost_usd=row.get("estimated_cost_usd"),
+        cost_basis="synthetic_probe_budget_estimate",
+        metadata={
+            "is_test": True,
+            "scoring_eligible": False,
+            **{
+                k: row.get(k)
+                for k in (
+                    "run_id",
+                    "score",
+                    "cost_class",
+                    "http_status",
+                    "served_model",
+                    "responses_ok",
+                    "tools_ok",
+                    "profile",
+                )
+            },
+        },
+    )
 
 
 ADAPTERS = {
@@ -628,6 +644,7 @@ ADAPTERS = {
     "zcode_io": lambda s, n, p: jsonl(s, n, p, zcode_io_record),
     "routing_receipt": routing_receipt,
     "model_probe": model_probe,
+    "model_probe_snapshot": model_probe_snapshot,
 }
 
 

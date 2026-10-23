@@ -87,67 +87,36 @@ function mount() {
 }
 
 describe("Model availability", () => {
-  it("shows the persisted spending scope when reopening a running batch", async () => {
-    running = true;
-    fetchMock.mockImplementation(
-      async () =>
-        new Response(
-          JSON.stringify({
-            ...data(),
-            run: {
-              ...data().run,
-              policy: {
-                cost_mode: "metered",
-                minimum_score: 40,
-                include_unscored: false,
-                retest: true,
-                max_input_usd_per_million: 2,
-                max_output_usd_per_million: 7,
-                estimated_budget_usd: 0.5,
-              },
-            },
-          }),
-          { status: 200 },
-        ),
-    );
-    mount();
-    await screen.findByRole("progressbar");
-    expect(screen.getByLabelText("Test spending")).toHaveValue("metered");
-    expect(screen.getByLabelText("Test spending")).toBeDisabled();
-    expect(screen.getByLabelText("Estimated batch budget ($)")).toHaveValue(0.5);
-  });
-  it("shows ranked unknown and failed routes, and filters available routes", async () => {
+  it("shows usable routes and keeps detailed scan controls in OmniRoute", async () => {
     mount();
     await screen.findByText("Model A");
-    expect(screen.getAllByTestId("availability-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("Model A"),
-      expect.stringContaining("Model B"),
-      expect.stringContaining("Unknown score"),
-    ]);
-    fireEvent.change(screen.getByLabelText("Filter availability"), {
-      target: { value: "available" },
-    });
     expect(screen.getAllByTestId("availability-row")).toHaveLength(1);
     expect(screen.queryByText("Model B")).toBeNull();
-    expect(screen.getByText("Remaining quota: not reported")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Tests, providers and quotas/ })).toHaveAttribute(
+      "href",
+      "https://sg-apps.taile0361b.ts.net:9443/availability",
+    );
+    expect(screen.getByText("Harness: no observed client turn")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Show unverified and failed routes"));
+    expect(screen.getAllByTestId("availability-row")).toHaveLength(3);
+    fireEvent.change(screen.getByLabelText("Minimum TB4 score"), { target: { value: "30" } });
+    expect(screen.getAllByTestId("availability-row")).toHaveLength(1);
   });
-  it("starts a scoped batch, shows progress, and stops it", async () => {
+  it("starts the shared included scan and shows its progress", async () => {
     mount();
-    const button = await screen.findByRole("button", { name: /Test all models in scope/ });
-    await waitFor(() => expect(button).toBeEnabled());
-    fireEvent.change(screen.getByLabelText("Test spending"), { target: { value: "free" } });
+    const button = await screen.findByRole("button", { name: "Refresh availability" });
     await waitFor(() => expect(button).toBeEnabled());
     fireEvent.click(button);
-    await screen.findByRole("progressbar");
+    await screen.findByText(/OmniRoute is testing/);
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/test"));
-    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
-      cost_mode: "free",
-      include_unscored: true,
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      cost_mode: "included",
       minimum_score: 0,
+      include_unscored: true,
+      retest: true,
     });
     expect(button).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Stop testing" }));
-    await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Stop testing" })).toBeNull();
   });
   it("surfaces gateway failures instead of an empty successful list", async () => {
     fetchMock.mockResolvedValue(

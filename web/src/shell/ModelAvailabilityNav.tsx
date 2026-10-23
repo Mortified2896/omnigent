@@ -24,7 +24,7 @@ export function ModelAvailabilityNav({
   return (
     <PrimaryNavLink
       to="/models"
-      label="Model availability"
+      label="Available models"
       icon={ListChecksIcon}
       active={location.pathname.endsWith("/models")}
       onClick={onNavigate}

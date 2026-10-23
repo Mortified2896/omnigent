@@ -9,13 +9,12 @@ from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._content_type import require_json_content_type
 from omnigent.server.routes._origin import require_trusted_origin
 
-from .availability import AvailabilityService, ProbePolicy, plan
+from .availability import ProbePolicy, gateway_request
 from .service import TB4Policy, catalogue, enabled
 
 
 def create_tb4_router(auth_provider=None, permission_store=None):
     router = APIRouter()
-    availability = AvailabilityService()
 
     async def operator(request):
         user = require_user(request, auth_provider)
@@ -32,31 +31,29 @@ def create_tb4_router(auth_provider=None, permission_store=None):
     @router.get("/routing/availability")
     async def overview(request: Request):
         await operator(request)
-        return await availability.overview()
+        return await gateway_request("GET")
 
     guards = [Depends(require_json_content_type), Depends(require_trusted_origin)]
 
     @router.post("/routing/availability/refresh", dependencies=guards)
     async def refresh(request: Request):
         await operator(request)
-        return await availability.overview(refresh=True)
+        return await gateway_request("POST", "/refresh", {})
 
     @router.post("/routing/availability/plan", dependencies=guards)
     async def test_plan(request: Request, policy: ProbePolicy):
         await operator(request)
-        data = await availability.overview()
-        targets, skipped, estimate = plan(data["rows"], policy)
-        return {"targets": len(targets), "skipped": skipped, "estimated_probe_usd": estimate}
+        return await gateway_request("POST", "/plan", policy.model_dump())
 
     @router.post("/routing/availability/test", dependencies=guards)
     async def test_models(request: Request, policy: ProbePolicy):
-        user = await operator(request)
-        return await availability.start(policy, user)
+        await operator(request)
+        return await gateway_request("POST", "/test", policy.model_dump())
 
     @router.post("/routing/availability/cancel", dependencies=guards)
     async def cancel_test(request: Request):
         await operator(request)
-        return await availability.cancel()
+        return await gateway_request("POST", "/cancel", {})
 
     @router.get("/routing/tb4")
     async def status(request: Request):

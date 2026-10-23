@@ -100,7 +100,7 @@ export function TB4RoutingControl({
         <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Preview</span>
       </label>
       <a href="/models" className="mt-3 inline-block text-sm font-medium underline">
-        Model availability · test all providers
+        Available models · shared OmniRoute results
       </a>
       {value && (
         <div className="mt-4 space-y-4">

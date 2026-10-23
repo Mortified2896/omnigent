@@ -8,9 +8,7 @@ from omnigent.trace_store.store import Store, scrub, source_db
 
 
 def test_probe_history_ingests_once_without_payloads(tmp_path):
-    from omnigent.server.tb4_routing.availability_store import ProbeStore
-
-    probes = ProbeStore(tmp_path / "probes")
+    probe_path = tmp_path / "probes.sqlite"
     outcome = {
         "run_id": "run-one",
         "route": "provider/test-model",
@@ -22,18 +20,106 @@ def test_probe_history_ingests_once_without_payloads(tmp_path):
         "latency_ms": 40,
         "prompt": "secret user content",
     }
-    probes.result(outcome)
-    probes.result({**outcome, "run_id": "run-two", "status": "failed"})
-    assert len(probes.results()) == 1
+    with sqlite3.connect(probe_path) as db:
+        db.execute("CREATE TABLE history (data TEXT)")
+        db.executemany(
+            "INSERT INTO history VALUES (?)",
+            [
+                (json.dumps(r),)
+                for r in [outcome, {**outcome, "run_id": "run-two", "status": "failed"}]
+            ],
+        )
     store = Store(tmp_path / "analysis.sqlite")
-    spec = {"sources": [{"id": "probes", "kind": "model_probe", "path": str(probes.path)}]}
+    spec = {"sources": [{"id": "probes", "kind": "model_probe", "path": str(probe_path)}]}
     assert collect(store, spec) == []
     assert collect(store, spec) == []
+    snapshot = tmp_path / "central-snapshot.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "history": [outcome, {**outcome, "run_id": "run-two", "status": "failed"}],
+            }
+        )
+    )
+    assert (
+        collect(
+            store,
+            {"sources": [{"id": "probes", "kind": "model_probe_snapshot", "path": str(snapshot)}]},
+        )
+        == []
+    )
     events = [dict(r) for r in store.db.execute("SELECT * FROM events")]
     assert len(events) == 2
     assert {r["status"] for r in events} == {"available", "failed"}
     assert "secret user content" not in json.dumps(events)
     assert all(json.loads(r["metadata"])["scoring_eligible"] is False for r in events)
+
+
+def test_harness_projection_requires_observed_identity_and_matching_turn(tmp_path):
+    from omnigent.trace_store.harness_evidence import observations
+
+    store = Store(tmp_path / "evidence.sqlite")
+    store.upsert(
+        "sessions",
+        source="client",
+        id="session",
+        harness="codex",
+        metadata={"routing_policy": "tb4"},
+    )
+    fields = {"session_id": "session", "turn_id": "turn", "timestamp": time.time()}
+    attribution = {
+        "actual_model": "codex/model",
+        "requested_model": "codex/model",
+        "access_lane": "omniroute",
+        "model_status": "observed",
+    }
+    store.event(
+        "client", "execution", "execution", **fields, model="codex/model", metadata=attribution
+    )
+    store.event("client", "tool", "tool_call", **fields, metadata={"call_id": "tool"})
+    assert observations(store) == []
+    store.event(
+        "client",
+        "answer",
+        "message",
+        **fields,
+        status="completed",
+        metadata={"role": "assistant"},
+        detail="private task answer",
+    )
+    store.event(
+        "client",
+        "wrong-turn",
+        "tool_result",
+        **{**fields, "turn_id": "other"},
+        status="completed",
+        metadata={"call_id": "tool"},
+    )
+    assert observations(store)[0]["tools_completed"] is False
+    store.event(
+        "client",
+        "tool-result",
+        "tool_result",
+        **fields,
+        status="completed",
+        metadata={"call_id": "tool"},
+    )
+    result = observations(store)[0]
+    assert result["tools_completed"] is True and result["outcome"] == "response_observed"
+    assert "private" not in json.dumps(result) and "session" not in json.dumps(result)
+    store.event("client", "error", "error", **fields, status="error")
+    assert observations(store)[0]["outcome"] == "error_observed"
+    assert observations(store)[0]["tools_completed"] is False
+    store.event(
+        "client",
+        "execution",
+        "execution",
+        **fields,
+        model="codex/model",
+        metadata={**attribution, "model_status": "inferred"},
+    )
+    assert observations(store) == []
 
 
 def log(name="codex.api_request", **attributes):
